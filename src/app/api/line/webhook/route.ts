@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyLineSignature, pushToGroup } from "@/lib/line";
-import { lineReady } from "@/lib/env";
+import { verifyLineSignature, replyMessage } from "@/lib/line";
+import { hasReal } from "@/lib/env";
 import { addLineMessage, getArticle, updateArticle } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
   const raw = await req.text();
 
   // ตรวจ signature เฉพาะเมื่อมี channel secret จริง
-  if (lineReady()) {
+  if (hasReal(process.env.LINE_CHANNEL_SECRET)) {
     const sig = req.headers.get("x-line-signature");
     if (!verifyLineSignature(raw, sig)) {
       return NextResponse.json({ error: "invalid signature" }, { status: 401 });
@@ -42,8 +42,8 @@ export async function POST(req: NextRequest) {
     const groupId = ev.source?.groupId;
 
     if (/^groupid$/i.test(text)) {
-      const reply = `group id ของกลุ่มนี้คือ:\n${groupId || "(ไม่ใช่กลุ่ม)"}\nนำไปใส่ LINE_GROUP_ID ใน .env`;
-      await pushToGroup(reply);
+      const reply = `group id ของกลุ่มนี้คือ:\n${groupId || "(ไม่ใช่กลุ่ม)"}\nนำไปใส่ LINE_GROUP_ID ใน Vercel`;
+      if (ev.replyToken) await replyMessage(ev.replyToken, reply);
       await addLineMessage("draft", reply);
       continue;
     }
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
       if (article && !isNaN(when.getTime())) {
         await updateArticle(id, { status: "scheduled", scheduled_at: when.toISOString() });
         const reply = `✅ อนุมัติ+ตั้งเวลาแล้ว: ${article.title}\nจะปล่อย: ${when.toISOString()}`;
-        await pushToGroup(reply);
+        if (ev.replyToken) await replyMessage(ev.replyToken, reply);
         await addLineMessage("publish_confirm", reply, id);
       }
       continue;
@@ -69,6 +69,7 @@ export async function POST(req: NextRequest) {
 
 interface LineEvent {
   type: string;
+  replyToken?: string;
   message?: { type: string; text?: string };
   source?: { groupId?: string; userId?: string };
 }

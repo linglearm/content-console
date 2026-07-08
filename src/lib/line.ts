@@ -2,9 +2,34 @@
  * LINE Messaging API — ส่งข้อความเข้ากลุ่ม + ตรวจ signature ของ webhook
  */
 import crypto from "crypto";
-import { lineReady } from "./env";
+import { hasReal, lineReady } from "./env";
 
 const PUSH_URL = "https://api.line.me/v2/bot/message/push";
+const REPLY_URL = "https://api.line.me/v2/bot/message/reply";
+
+/** มี channel access token จริงไหม (ใช้ตัดสินใจ reply — ไม่ต้องมี group id) */
+export function lineTokenReady(): boolean {
+  return hasReal(process.env.LINE_CHANNEL_ACCESS_TOKEN);
+}
+
+/**
+ * ตอบกลับข้อความด้วย reply token (ใช้ตอนบอทตอบคำสั่งในกลุ่ม เช่น groupid/อนุมัติ)
+ * ต้องมีแค่ channel access token — ไม่ต้องมี group id
+ */
+export async function replyMessage(replyToken: string, text: string): Promise<boolean> {
+  if (!lineTokenReady()) return false;
+  const token = process.env.LINE_CHANNEL_ACCESS_TOKEN!;
+  const res = await fetch(REPLY_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ replyToken, messages: [{ type: "text", text }] }),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`LINE reply error ${res.status}: ${detail}`);
+  }
+  return true;
+}
 
 /**
  * ส่งข้อความเข้ากลุ่ม LINE
