@@ -61,6 +61,7 @@ export async function createArticle(input: {
   body: string;
   excerpt: string;
   image_url: string | null;
+  refs?: string | null;
   status?: ArticleStatus;
 }): Promise<Article> {
   const row: Article = {
@@ -70,6 +71,7 @@ export async function createArticle(input: {
     body: input.body,
     excerpt: input.excerpt,
     image_url: input.image_url,
+    refs: input.refs ?? null,
     status: input.status || "pending",
     scheduled_at: null,
     published_at: null,

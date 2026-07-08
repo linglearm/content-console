@@ -66,6 +66,31 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
         <img src={article.image_url} alt={article.title} className="w-full rounded-lg mb-6" />
       )}
       <div className="prose max-w-none">{renderBody(article.body)}</div>
+      {article.refs && (
+        <section className="mt-10 border-t pt-6">
+          <h2 className="text-sm font-semibold text-gray-500 mb-2">แหล่งอ้างอิง</h2>
+          <ul className="space-y-1 text-sm">
+            {article.refs
+              .split("\n")
+              .map((r) => r.trim())
+              .filter(Boolean)
+              .map((r, i) => {
+                const url = r.match(/https?:\/\/\S+/)?.[0];
+                return (
+                  <li key={i} className="break-words text-gray-600">
+                    {url ? (
+                      <a href={url} target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:underline">
+                        {r}
+                      </a>
+                    ) : (
+                      r
+                    )}
+                  </li>
+                );
+              })}
+          </ul>
+        </section>
+      )}
     </article>
   );
 }

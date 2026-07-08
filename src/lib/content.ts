@@ -19,7 +19,7 @@ import { generateWithClaude } from "./claude";
 import { generateWithGemini } from "./gemini";
 import { pollinationsUrl } from "./pollinations";
 import { stockImageUrl } from "./stockImages";
-import { postToPage, fbPostUrl } from "./facebook";
+import { postToPage, fbPostUrl, commentOnPost } from "./facebook";
 import { pushToGroup } from "./line";
 import {
   addLineMessage,
@@ -92,6 +92,7 @@ async function scheduleArticle(input: {
   body: string;
   excerpt: string;
   image_url: string;
+  refs?: string | null;
   scheduled_at?: string;
 }): Promise<Article> {
   let scheduled_at = (input.scheduled_at || "").toString().trim();
@@ -107,6 +108,7 @@ async function scheduleArticle(input: {
     body: input.body,
     excerpt: input.excerpt,
     image_url: input.image_url,
+    refs: input.refs ?? null,
     status: "scheduled",
   });
   const updated = await updateArticle(article.id, { scheduled_at });
@@ -137,6 +139,7 @@ export async function ingestArticle(input: {
   body: string;
   excerpt?: string;
   image_url?: string;
+  refs?: string | null; // แหล่งอ้างอิง (คั่นบรรทัด) → คอมเมนต์ใต้โพสต์ FB
   scheduled_at?: string; // slot ที่ routine กำหนด (UTC ISO); ไม่ส่งมา = หาช่องว่างถัดไปเอง
 }): Promise<Article> {
   return scheduleArticle({
@@ -145,6 +148,7 @@ export async function ingestArticle(input: {
     body: input.body,
     excerpt: (input.excerpt || "").trim() || deriveExcerpt(input.body),
     image_url: (input.image_url || "").trim() || coverImage(input.topic, input.title),
+    refs: (input.refs || "").toString().trim() || null,
     scheduled_at: input.scheduled_at,
   });
 }
@@ -170,6 +174,11 @@ export async function publishDue(nowISO?: string): Promise<Article[]> {
 
     // โพสต์เนื้อหาเต็มลง Facebook Fanpage (รูป + แคปชั่นเต็ม; mock จะคืน postId ปลอม)
     const fb = await postToPage(a.body, { imageUrl: a.image_url || undefined, link });
+
+    // แหล่งอ้างอิง → คอมเมนต์ใต้โพสต์ (ไม่ใส่ในตัวโพสต์) — พลาดก็ไม่ทำให้ publish ล้ม
+    if (a.refs && fb.posted) {
+      await commentOnPost(fb.postId, a.refs);
+    }
 
     const updated = await updateArticle(a.id, {
       status: "published",

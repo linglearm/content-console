@@ -79,6 +79,7 @@ function seed(): MockDB {
       `สรุป: เนื้อหานี้จะถูกแทนที่ด้วยบทความจริงที่ AI เขียน เมื่อใส่ ANTHROPIC_API_KEY แล้ว`,
     excerpt: `บทความตัวอย่างแนวฟิตเนส/เพาะกายเกี่ยวกับ ${s.topic} สำหรับทดสอบระบบในเฟส 1`,
     image_url: `https://image.pollinations.ai/prompt/${encodeURIComponent(s.topic!)}?width=1024&height=576&nologo=true`,
+    refs: null,
     status: (s.status as Article["status"]) || "pending",
     scheduled_at: s.scheduled_at ?? null,
     published_at: s.published_at ?? null,

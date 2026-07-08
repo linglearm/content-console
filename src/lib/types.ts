@@ -7,6 +7,7 @@ export interface Article {
   body: string;
   excerpt: string; // คำโปรย (ดึงจากช่วงต้นของ body ตอนสร้าง)
   image_url: string | null;
+  refs: string | null; // แหล่งอ้างอิง (หลายลิงก์ คั่นบรรทัด) — โพสต์เป็นคอมเมนต์ใต้โพสต์ FB + แสดงท้ายบทความเว็บ
   status: ArticleStatus;
   scheduled_at: string | null; // ISO
   published_at: string | null; // ISO

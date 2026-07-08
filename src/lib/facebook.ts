@@ -78,3 +78,26 @@ export async function postToPage(
   const data = await res.json();
   return { posted: true, postId: data.id || null };
 }
+
+/**
+ * คอมเมนต์ใต้โพสต์ของเพจ — ใช้ลงแหล่งอ้างอิง (references) แยกจากตัวโพสต์
+ * postId = "{pageId}_{storyId}" ที่ได้จาก postToPage
+ * คืน true ถ้าคอมเมนต์สำเร็จ, false ถ้า mock/ข้อความว่าง/ยิงไม่ผ่าน (ไม่ throw — คอมเมนต์พลาดไม่ควรทำให้ publish ล้ม)
+ */
+export async function commentOnPost(postId: string | null, message: string): Promise<boolean> {
+  const text = (message || "").trim();
+  if (!facebookReady() || !postId || postId.startsWith("mock-") || !text) return false;
+  const token = process.env.FACEBOOK_PAGE_ACCESS_TOKEN!;
+  const version = process.env.FACEBOOK_GRAPH_VERSION || "v21.0";
+  try {
+    const params = new URLSearchParams({ message: text, access_token: token });
+    const res = await fetch(`https://graph.facebook.com/${version}/${postId}/comments`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
