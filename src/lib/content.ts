@@ -21,7 +21,7 @@ import { pollinationsUrl } from "./pollinations";
 import { stockImageUrl } from "./stockImages";
 import { postToPage, fbPostUrl } from "./facebook";
 import { pushToGroup, pushFlexToGroup } from "./line";
-import { buildDraftFlex, buildPublishedFlex } from "./flex";
+import { buildPublishedFlex } from "./flex";
 import {
   addLineMessage,
   countScheduled,
@@ -81,39 +81,46 @@ async function writeText(topic: string): Promise<GeneratedArticle> {
 
 // ---------------------------------------------------------------------------
 
-/** บันทึกดราฟต์ (ใช้ร่วมกันระหว่าง generate ในแอป และ ingest จาก Claude routine) */
-async function saveDraft(input: {
+/**
+ * หัวใจกลาง — เพิ่มบทความ "เข้าคิว schedule" (ทุกทางเพิ่มโพสต์ต้องผ่านที่นี่)
+ * ตั้ง status=scheduled + scheduled_at ทันที (ใช้ slot ที่ส่งมา หรือหาช่องว่างถัดไปในคิว)
+ * ไม่มีสถานะ pending / ไม่ส่งการ์ด approve เข้า LINE — โพสต์จะขึ้นเพจอัตโนมัติผ่าน Vercel Cron
+ * แล้วค่อยแจ้ง LINE ตอน "ขึ้นเพจแล้ว" (ใน publishDue)
+ */
+async function scheduleArticle(input: {
   topic: string;
   title: string;
   body: string;
   excerpt: string;
   image_url: string;
+  scheduled_at?: string;
 }): Promise<Article> {
+  let scheduled_at = (input.scheduled_at || "").toString().trim();
+  if (!scheduled_at) {
+    const scheduled = await listArticles({ status: "scheduled" });
+    scheduled_at = firstOpenSlot(scheduled, new Date(), postTimes(), bufferTargetDays() + 3);
+  } else {
+    scheduled_at = new Date(scheduled_at).toISOString(); // normalize
+  }
   const article = await createArticle({
     topic: input.topic,
     title: input.title,
     body: input.body,
     excerpt: input.excerpt,
     image_url: input.image_url,
-    status: "pending",
+    status: "scheduled",
   });
-
-  // ส่งการ์ด Flex (มีปุ่ม ✅อนุมัติ / ✏️แก้ไข / 🚫ไม่อนุมัติ) เข้ากลุ่ม LINE
-  const flex = buildDraftFlex(article, siteUrl());
-  const sentLive = await pushFlexToGroup(flex.altText, flex.contents);
-  const outboxText = `📝 ดราฟต์รออนุมัติ\nหัวเรื่อง: ${article.title}\nคำโปรย: ${input.excerpt}`;
-  await addLineMessage("draft", (sentLive ? "" : "[mock] ") + outboxText, article.id);
-
-  return article;
+  const updated = await updateArticle(article.id, { scheduled_at });
+  return updated || { ...article, scheduled_at };
 }
 
 /**
  * สร้างบทความในแอป (ให้ AI ในแอปเขียน — ใช้เมื่อมี ANTHROPIC_API_KEY, ไม่งั้น mock)
- * ทางเลือก B: ปกติจะให้ Claude routine เขียนแล้วส่งเข้ามาทาง ingestArticle แทน
+ * → เข้าคิว schedule เหมือนกัน (ไม่โพสต์ทันที ไม่มีดราฟต์รอ approve)
  */
 export async function generateArticle(topic: string): Promise<Article> {
   const gen = await writeText(topic);
-  return saveDraft({
+  return scheduleArticle({
     topic,
     title: gen.title,
     body: gen.body,
@@ -124,8 +131,6 @@ export async function generateArticle(topic: string): Promise<Article> {
 
 /**
  * รับบทความ "สำเร็จรูป" จาก Claude routine → เข้าคิวปล่อยอัตโนมัติ (ไม่ผ่าน approve)
- * ตั้งสถานะ scheduled + scheduled_at ทันที (ใช้ slot ที่ routine ส่งมา หรือหาช่องว่างถัดไป)
- * ไม่ส่งการ์ดเข้า LINE ตอนนี้ — จะแจ้งเฉพาะตอน "ขึ้นเพจแล้ว" (publishDue)
  */
 export async function ingestArticle(input: {
   topic: string;
@@ -135,28 +140,14 @@ export async function ingestArticle(input: {
   image_url?: string;
   scheduled_at?: string; // slot ที่ routine กำหนด (UTC ISO); ไม่ส่งมา = หาช่องว่างถัดไปเอง
 }): Promise<Article> {
-  const excerpt = (input.excerpt || "").trim() || deriveExcerpt(input.body);
-  const image_url = (input.image_url || "").trim() || coverImage(input.topic, input.title);
-
-  // กำหนดเวลาปล่อย: ใช้ค่าที่ส่งมา หรือหาช่องว่างถัดไปในคิว
-  let scheduled_at = (input.scheduled_at || "").toString().trim();
-  if (!scheduled_at) {
-    const scheduled = await listArticles({ status: "scheduled" });
-    scheduled_at = firstOpenSlot(scheduled, new Date(), postTimes(), bufferTargetDays() + 3);
-  } else {
-    scheduled_at = new Date(scheduled_at).toISOString(); // normalize
-  }
-
-  const article = await createArticle({
+  return scheduleArticle({
     topic: input.topic,
     title: input.title,
     body: input.body,
-    excerpt,
-    image_url,
-    status: "scheduled",
+    excerpt: (input.excerpt || "").trim() || deriveExcerpt(input.body),
+    image_url: (input.image_url || "").trim() || coverImage(input.topic, input.title),
+    scheduled_at: input.scheduled_at,
   });
-  const updated = await updateArticle(article.id, { scheduled_at });
-  return updated || { ...article, scheduled_at };
 }
 
 /** สถานะคิว buffer (ให้ routine เช็กว่าต้องเติมไหม) */

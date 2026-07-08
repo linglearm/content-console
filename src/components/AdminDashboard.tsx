@@ -58,7 +58,7 @@ export function AdminDashboard() {
       body: JSON.stringify({ topic }),
     });
     const data = await res.json();
-    setNote(res.ok ? "สร้างแล้ว — ดราฟต์ถูกส่งเข้ากลุ่ม LINE" : `ผิดพลาด: ${data.error}`);
+    setNote(res.ok ? "สร้างแล้ว — เข้าคิวตั้งเวลาปล่อยอัตโนมัติแล้ว" : `ผิดพลาด: ${data.error}`);
     setTopic("");
     await load();
     setBusy(false);
@@ -85,20 +85,16 @@ export function AdminDashboard() {
     await load();
   }
 
-  async function runTask(task: "publish" | "stock") {
+  async function runStock() {
     setBusy(true);
-    setNote(task === "publish" ? "กำลังปล่อยบทความที่ถึงเวลา…" : "กำลังเช็กสต็อก…");
+    setNote("กำลังเช็กสต็อก…");
     const res = await fetch("/api/admin/run", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ task }),
+      body: JSON.stringify({ task: "stock" }),
     });
     const data = await res.json();
-    setNote(
-      task === "publish"
-        ? `ปล่อยแล้ว ${data.publishedCount ?? 0} ชิ้น`
-        : `สต็อก ${data.count} ชิ้น ${data.alerted ? "(แจ้งเตือนแล้ว)" : "(ปกติ)"}`
-    );
+    setNote(`สต็อก ${data.count} ชิ้น ${data.alerted ? "(แจ้งเตือนแล้ว)" : "(ปกติ)"}`);
     await load();
     setBusy(false);
   }
@@ -169,11 +165,9 @@ export function AdminDashboard() {
                 className="mt-1 w-20 rounded border px-2 py-1"
               />
             </label>
-            <div className="ml-auto flex gap-2">
-              <button onClick={() => runTask("publish")} disabled={busy} className="rounded border px-3 py-1.5 hover:bg-gray-100">
-                รันปล่อยโพสต์
-              </button>
-              <button onClick={() => runTask("stock")} disabled={busy} className="rounded border px-3 py-1.5 hover:bg-gray-100">
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-xs text-gray-400">ปล่อยโพสต์อัตโนมัติผ่านคิว (Vercel Cron)</span>
+              <button onClick={runStock} disabled={busy} className="rounded border px-3 py-1.5 hover:bg-gray-100">
                 รันเช็กสต็อก
               </button>
             </div>
