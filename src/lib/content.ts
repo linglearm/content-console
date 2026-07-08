@@ -134,10 +134,9 @@ export async function publishDue(nowISO?: string): Promise<Article[]> {
 
   for (const a of due) {
     const link = `${siteUrl()}/article/${a.id}`;
-    const message = `${a.title}\n\n${a.excerpt}\n\nอ่านต่อ: ${link}`;
 
-    // โพสต์ลง Facebook Fanpage (mock จะคืน postId ปลอม)
-    const fb = await postToPage(message, link);
+    // โพสต์เนื้อหาเต็มลง Facebook Fanpage (รูป + แคปชั่นเต็ม; mock จะคืน postId ปลอม)
+    const fb = await postToPage(a.body, { imageUrl: a.image_url || undefined, link });
 
     const updated = await updateArticle(a.id, {
       status: "published",
