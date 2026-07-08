@@ -8,7 +8,7 @@ import { claudeReady, contentTheme, geminiReady, publishEnabled, textProvider } 
 import { generateWithClaude } from "./claude";
 import { generateWithGemini } from "./gemini";
 import { pollinationsUrl } from "./pollinations";
-import { postToPage } from "./facebook";
+import { postToPage, fbPostUrl } from "./facebook";
 import { pushToGroup, pushFlexToGroup } from "./line";
 import { buildDraftFlex } from "./flex";
 import {
@@ -145,11 +145,14 @@ export async function publishDue(nowISO?: string): Promise<Article[]> {
     });
     if (updated) published.push(updated);
 
-    // ยืนยันเข้ากลุ่ม LINE
+    // ยืนยันเข้ากลุ่ม LINE — แจ้งว่าโพสต์ลงเพจแล้ว พร้อมลิงก์กดไปดูโพสต์จริง
+    const postUrl = fbPostUrl(fb.postId);
     const confirm =
-      `✅ เผยแพร่แล้ว: ${a.title}\n` +
+      `✅ โพสต์ลงเพจแล้ว: ${a.title}\n` +
       `เว็บ: ${link}\n` +
-      `FB: ${fb.posted ? "โพสต์แล้ว" : "[mock] จำลองโพสต์"} (id: ${fb.postId})`;
+      (fb.posted
+        ? `เพจ FB: ${postUrl || `โพสต์แล้ว (id: ${fb.postId})`}`
+        : `เพจ FB: [mock] จำลองโพสต์ (id: ${fb.postId})`);
     const sentLive = await pushToGroup(confirm);
     await addLineMessage("publish_confirm", (sentLive ? "" : "[mock] ") + confirm, a.id);
   }

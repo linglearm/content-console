@@ -10,6 +10,20 @@ export interface FbPostResult {
 }
 
 /**
+ * สร้างลิงก์ไปยังโพสต์จริงบนเพจ จาก postId ที่ Graph API คืนมา
+ * รูปแบบปกติคือ "{pageId}_{storyId}" → https://www.facebook.com/{pageId}/posts/{storyId}
+ * mock หรือไม่มี id → คืน null (ไม่มีลิงก์ให้กด)
+ */
+export function fbPostUrl(postId: string | null): string | null {
+  if (!postId || postId.startsWith("mock-")) return null;
+  const parts = postId.split("_");
+  if (parts.length === 2 && parts[0] && parts[1]) {
+    return `https://www.facebook.com/${parts[0]}/posts/${parts[1]}`;
+  }
+  return `https://www.facebook.com/${postId}`;
+}
+
+/**
  * โพสต์ลงเพจ — message = เนื้อหาโพสต์เต็ม
  * ถ้ามี imageUrl → โพสต์เป็นรูป + แคปชั่นเต็ม (photo post), ล้มเหลวก็ตกไปโพสต์ข้อความแทน
  * mock mode: คืน postId ปลอมเพื่อให้ฟลว์เดินต่อได้
