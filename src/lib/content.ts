@@ -4,10 +4,21 @@
  *   publishDue      : ดึง scheduled ที่ถึงเวลา → โพสต์เว็บ+FB → published + ยืนยันเข้า LINE
  *   stockCheck      : นับที่รอปล่อย ถ้าต่ำกว่าเกณฑ์ → แจ้งเตือน LINE
  */
-import { claudeReady, contentTheme, geminiReady, publishEnabled, textProvider } from "./env";
+import {
+  bufferMinDays,
+  bufferTargetDays,
+  claudeReady,
+  contentTheme,
+  geminiReady,
+  postTimes,
+  publishEnabled,
+  textProvider,
+} from "./env";
+import { computePlan, firstOpenSlot, type BufferPlan } from "./schedule";
 import { generateWithClaude } from "./claude";
 import { generateWithGemini } from "./gemini";
 import { pollinationsUrl } from "./pollinations";
+import { stockImageUrl } from "./stockImages";
 import { postToPage, fbPostUrl } from "./facebook";
 import { pushToGroup, pushFlexToGroup } from "./line";
 import { buildDraftFlex, buildPublishedFlex } from "./flex";
@@ -16,6 +27,7 @@ import {
   countScheduled,
   createArticle,
   getSettings,
+  listArticles,
   listDue,
   updateArticle,
 } from "./store";
@@ -29,6 +41,16 @@ export interface GeneratedArticle {
 
 function siteUrl(): string {
   return (process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000").replace(/\/$/, "");
+}
+
+/**
+ * รูปปกบทความ — ค่าเริ่มต้นใช้รูปสต็อกฟรีจาก Unsplash (ภาพถ่ายจริง)
+ * ตั้ง IMAGE_SOURCE=pollinations เพื่อกลับไปใช้รูป AI แทน
+ */
+function coverImage(topic: string, seed = ""): string {
+  const src = (process.env.IMAGE_SOURCE || "stock").toLowerCase();
+  if (src === "pollinations") return pollinationsUrl(topic);
+  return stockImageUrl(topic, seed);
 }
 
 /** ตัด excerpt จาก body ถ้า provider ไม่ส่งมา */
@@ -96,13 +118,14 @@ export async function generateArticle(topic: string): Promise<Article> {
     title: gen.title,
     body: gen.body,
     excerpt: gen.excerpt || deriveExcerpt(gen.body),
-    image_url: pollinationsUrl(topic),
+    image_url: coverImage(topic, gen.title),
   });
 }
 
 /**
- * รับบทความ "สำเร็จรูป" จากภายนอก (Claude scheduled routine เขียนมาให้)
- * → บันทึก pending + ส่งดราฟต์เข้า LINE — ไม่เรียก AI ในแอป (ไม่มีค่า API)
+ * รับบทความ "สำเร็จรูป" จาก Claude routine → เข้าคิวปล่อยอัตโนมัติ (ไม่ผ่าน approve)
+ * ตั้งสถานะ scheduled + scheduled_at ทันที (ใช้ slot ที่ routine ส่งมา หรือหาช่องว่างถัดไป)
+ * ไม่ส่งการ์ดเข้า LINE ตอนนี้ — จะแจ้งเฉพาะตอน "ขึ้นเพจแล้ว" (publishDue)
  */
 export async function ingestArticle(input: {
   topic: string;
@@ -110,16 +133,36 @@ export async function ingestArticle(input: {
   body: string;
   excerpt?: string;
   image_url?: string;
+  scheduled_at?: string; // slot ที่ routine กำหนด (UTC ISO); ไม่ส่งมา = หาช่องว่างถัดไปเอง
 }): Promise<Article> {
   const excerpt = (input.excerpt || "").trim() || deriveExcerpt(input.body);
-  const image_url = (input.image_url || "").trim() || pollinationsUrl(input.topic);
-  return saveDraft({
+  const image_url = (input.image_url || "").trim() || coverImage(input.topic, input.title);
+
+  // กำหนดเวลาปล่อย: ใช้ค่าที่ส่งมา หรือหาช่องว่างถัดไปในคิว
+  let scheduled_at = (input.scheduled_at || "").toString().trim();
+  if (!scheduled_at) {
+    const scheduled = await listArticles({ status: "scheduled" });
+    scheduled_at = firstOpenSlot(scheduled, new Date(), postTimes(), bufferTargetDays() + 3);
+  } else {
+    scheduled_at = new Date(scheduled_at).toISOString(); // normalize
+  }
+
+  const article = await createArticle({
     topic: input.topic,
     title: input.title,
     body: input.body,
     excerpt,
     image_url,
+    status: "scheduled",
   });
+  const updated = await updateArticle(article.id, { scheduled_at });
+  return updated || { ...article, scheduled_at };
+}
+
+/** สถานะคิว buffer (ให้ routine เช็กว่าต้องเติมไหม) */
+export async function getBufferPlan(): Promise<BufferPlan> {
+  const scheduled = await listArticles({ status: "scheduled" });
+  return computePlan(scheduled, new Date(), postTimes(), bufferTargetDays(), bufferMinDays());
 }
 
 /** ปล่อยบทความที่ถึงเวลา (โพสต์เว็บ + FB) */

@@ -72,6 +72,24 @@ export function publishEnabled(): boolean {
   return (process.env.PUBLISH_ENABLED || "").toLowerCase() === "true";
 }
 
+/** เวลาโพสต์ต่อวัน (Asia/Bangkok, รูปแบบ HH:MM) — จำนวน = โพสต์ต่อวัน */
+export function postTimes(): string[] {
+  return (process.env.POST_TIMES || "10:00,16:00,19:00,21:00")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** buffer: เตรียมโพสต์ล่วงหน้ากี่วัน (เป้า) */
+export function bufferTargetDays(): number {
+  return Math.max(1, Number(process.env.BUFFER_TARGET_DAYS || 5));
+}
+
+/** buffer: ถ้าคิวเหลือน้อยกว่ากี่วัน จึงเติมใหม่ */
+export function bufferMinDays(): number {
+  return Math.max(1, Number(process.env.BUFFER_MIN_DAYS || 3));
+}
+
 /** ธีม/แนวเนื้อหาของแบรนด์ (SiamAthlete: ฟิตเนส/เพาะกาย/วิทย์การออกกำลังกาย/โภชนาการ) */
 export function contentTheme(): string {
   return (

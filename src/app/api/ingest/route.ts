@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
       body,
       excerpt: b.excerpt,
       image_url: b.image_url,
+      scheduled_at: b.scheduled_at,
     });
     return NextResponse.json({ article });
   } catch (e) {
