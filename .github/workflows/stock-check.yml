@@ -1,0 +1,20 @@
+name: stock-check
+
+# เช็กสต็อกบทความ — ยิงวันละ 2 รอบ (09:00 และ 18:00 เวลาไทย = 02:00, 11:00 UTC)
+on:
+  schedule:
+    - cron: "0 2,11 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  stock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call stock-check endpoint
+        run: |
+          curl -fsS -X POST "${SITE_URL}/api/stock-check" \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            --max-time 60
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
