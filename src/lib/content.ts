@@ -9,7 +9,8 @@ import { generateWithClaude } from "./claude";
 import { generateWithGemini } from "./gemini";
 import { pollinationsUrl } from "./pollinations";
 import { postToPage } from "./facebook";
-import { pushToGroup } from "./line";
+import { pushToGroup, pushFlexToGroup } from "./line";
+import { buildDraftFlex } from "./flex";
 import {
   addLineMessage,
   countScheduled,
@@ -75,14 +76,11 @@ async function saveDraft(input: {
     status: "pending",
   });
 
-  // ส่งดราฟต์เข้ากลุ่ม LINE ให้กด Approve/แก้ไข
-  const draftText =
-    `📝 ดราฟต์ใหม่รออนุมัติ\n` +
-    `หัวเรื่อง: ${article.title}\n` +
-    `คำโปรย: ${input.excerpt}\n` +
-    `กดอนุมัติ+ตั้งเวลาได้ในหลังบ้าน: ${siteUrl()}/admin`;
-  const sentLive = await pushToGroup(draftText);
-  await addLineMessage("draft", (sentLive ? "" : "[mock] ") + draftText, article.id);
+  // ส่งการ์ด Flex (มีปุ่ม ✅อนุมัติ / ✏️แก้ไข / 🚫ไม่อนุมัติ) เข้ากลุ่ม LINE
+  const flex = buildDraftFlex(article, siteUrl());
+  const sentLive = await pushFlexToGroup(flex.altText, flex.contents);
+  const outboxText = `📝 ดราฟต์รออนุมัติ\nหัวเรื่อง: ${article.title}\nคำโปรย: ${input.excerpt}`;
+  await addLineMessage("draft", (sentLive ? "" : "[mock] ") + outboxText, article.id);
 
   return article;
 }

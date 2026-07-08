@@ -58,6 +58,23 @@ export async function pushToGroup(text: string): Promise<boolean> {
   return true;
 }
 
+/** ส่งการ์ด Flex เข้ากลุ่ม (ดราฟต์ที่มีปุ่ม) — คืน false ถ้า mock */
+export async function pushFlexToGroup(altText: string, contents: unknown): Promise<boolean> {
+  if (!lineReady()) return false;
+  const token = process.env.LINE_CHANNEL_ACCESS_TOKEN!;
+  const to = process.env.LINE_GROUP_ID!;
+  const res = await fetch(PUSH_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ to, messages: [{ type: "flex", altText, contents }] }),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`LINE flex push error ${res.status}: ${detail}`);
+  }
+  return true;
+}
+
 /** ตรวจ x-line-signature ของ webhook (HMAC-SHA256 ด้วย channel secret) */
 export function verifyLineSignature(rawBody: string, signature: string | null): boolean {
   const secret = process.env.LINE_CHANNEL_SECRET;

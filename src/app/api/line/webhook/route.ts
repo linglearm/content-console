@@ -37,30 +37,67 @@ export async function POST(req: NextRequest) {
   }
 
   for (const ev of payload.events || []) {
-    if (ev.type !== "message" || ev.message?.type !== "text") continue;
-    const text = (ev.message.text || "").trim();
-    const groupId = ev.source?.groupId;
+    // --- ปุ่มบนการ์ด Flex (postback / datetimepicker) ---
+    if (ev.type === "postback") {
+      const data = new URLSearchParams(ev.postback?.data || "");
+      const action = data.get("action");
+      const id = data.get("id");
+      if (!id) continue;
+      const article = await getArticle(id);
+      if (!article) {
+        if (ev.replyToken) await replyMessage(ev.replyToken, "ไม่พบบทความนี้แล้ว (อาจถูกลบไปแล้ว)");
+        continue;
+      }
 
-    if (/^groupid$/i.test(text)) {
-      const reply = `group id ของกลุ่มนี้คือ:\n${groupId || "(ไม่ใช่กลุ่ม)"}\nนำไปใส่ LINE_GROUP_ID ใน Vercel`;
-      if (ev.replyToken) await replyMessage(ev.replyToken, reply);
-      await addLineMessage("draft", reply);
+      if (action === "approve") {
+        // datetimepicker ส่งเวลาที่เลือกมาใน params.datetime ("YYYY-MM-DDTHH:mm" = เวลาไทย)
+        const dt = ev.postback?.params?.datetime;
+        const when = dt ? new Date(`${dt}:00+07:00`) : null;
+        if (when && !isNaN(when.getTime())) {
+          await updateArticle(id, { status: "scheduled", scheduled_at: when.toISOString() });
+          const reply =
+            `✅ อนุมัติแล้ว: ${article.title}\n` +
+            `จะปล่อย: ${when.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })} น.`;
+          if (ev.replyToken) await replyMessage(ev.replyToken, reply);
+          await addLineMessage("publish_confirm", reply, id);
+        }
+      } else if (action === "reject") {
+        await updateArticle(id, { status: "rejected" });
+        const reply =
+          `🚫 ไม่อนุมัติแล้ว: ${article.title}\n` +
+          `(ระบบจะสร้างบทความใหม่มาแทนในรอบถัดไป)`;
+        if (ev.replyToken) await replyMessage(ev.replyToken, reply);
+        await addLineMessage("draft", reply, id);
+      }
       continue;
     }
 
-    // "อนุมัติ <id> <ISO>"
-    const approve = text.match(/^(?:อนุมัติ|approve)\s+(\S+)\s+(.+)$/i);
-    if (approve) {
-      const [, id, whenRaw] = approve;
-      const when = new Date(whenRaw);
-      const article = await getArticle(id);
-      if (article && !isNaN(when.getTime())) {
-        await updateArticle(id, { status: "scheduled", scheduled_at: when.toISOString() });
-        const reply = `✅ อนุมัติ+ตั้งเวลาแล้ว: ${article.title}\nจะปล่อย: ${when.toISOString()}`;
+    // --- คำสั่งข้อความในกลุ่ม (groupid / อนุมัติแบบพิมพ์) ---
+    if (ev.type === "message" && ev.message?.type === "text") {
+      const text = (ev.message.text || "").trim();
+      const groupId = ev.source?.groupId;
+
+      if (/^groupid$/i.test(text)) {
+        const reply = `group id ของกลุ่มนี้คือ:\n${groupId || "(ไม่ใช่กลุ่ม)"}\nนำไปใส่ LINE_GROUP_ID ใน Vercel`;
         if (ev.replyToken) await replyMessage(ev.replyToken, reply);
-        await addLineMessage("publish_confirm", reply, id);
+        await addLineMessage("draft", reply);
+        continue;
       }
-      continue;
+
+      // "อนุมัติ <id> <ISO>" (สำรอง สำหรับพิมพ์เอง)
+      const approve = text.match(/^(?:อนุมัติ|approve)\s+(\S+)\s+(.+)$/i);
+      if (approve) {
+        const [, id, whenRaw] = approve;
+        const when = new Date(whenRaw);
+        const article = await getArticle(id);
+        if (article && !isNaN(when.getTime())) {
+          await updateArticle(id, { status: "scheduled", scheduled_at: when.toISOString() });
+          const reply = `✅ อนุมัติ+ตั้งเวลาแล้ว: ${article.title}\nจะปล่อย: ${when.toISOString()}`;
+          if (ev.replyToken) await replyMessage(ev.replyToken, reply);
+          await addLineMessage("publish_confirm", reply, id);
+        }
+        continue;
+      }
     }
   }
 
@@ -71,5 +108,6 @@ interface LineEvent {
   type: string;
   replyToken?: string;
   message?: { type: string; text?: string };
+  postback?: { data?: string; params?: { datetime?: string } };
   source?: { groupId?: string; userId?: string };
 }

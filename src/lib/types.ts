@@ -1,4 +1,4 @@
-export type ArticleStatus = "pending" | "scheduled" | "published";
+export type ArticleStatus = "pending" | "scheduled" | "published" | "rejected";
 
 export interface Article {
   id: string;

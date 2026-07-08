@@ -24,6 +24,7 @@ export function AdminDashboard() {
   const [topic, setTopic] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const [editId, setEditId] = useState<string | null>(null); // จากลิงก์ ?edit=<id> (ปุ่มแก้ไขในการ์ด LINE)
 
   const load = useCallback(async () => {
     const [a, m, s] = await Promise.all([
@@ -39,6 +40,9 @@ export function AdminDashboard() {
 
   useEffect(() => {
     load();
+    // เปิดฟอร์มแก้ไขอัตโนมัติถ้ามาจากปุ่ม "แก้ไข" ในการ์ด LINE (?edit=<id>)
+    const p = new URLSearchParams(window.location.search);
+    setEditId(p.get("edit"));
   }, [load]);
 
   const scheduledCount = articles.filter((a) => a.status === "scheduled").length;
@@ -200,7 +204,14 @@ export function AdminDashboard() {
             <p className="text-gray-400 text-sm">ยังไม่มีบทความ — ลองสร้างจากช่องด้านบน</p>
           ) : (
             articles.map((a) => (
-              <ArticleCard key={a.id} article={a} onApprove={approve} onSave={save} onDelete={del} />
+              <ArticleCard
+                key={a.id}
+                article={a}
+                onApprove={approve}
+                onSave={save}
+                onDelete={del}
+                defaultEditing={a.id === editId}
+              />
             ))
           )}
         </div>

@@ -8,11 +8,13 @@ const STATUS_LABEL: Record<ArticleStatus, string> = {
   pending: "รออนุมัติ",
   scheduled: "ตั้งเวลาแล้ว",
   published: "เผยแพร่แล้ว",
+  rejected: "ไม่อนุมัติ",
 };
 const STATUS_COLOR: Record<ArticleStatus, string> = {
   pending: "bg-amber-100 text-amber-700",
   scheduled: "bg-blue-100 text-blue-700",
   published: "bg-green-100 text-green-700",
+  rejected: "bg-red-100 text-red-700",
 };
 
 function toLocalInput(iso: string | null): string {
@@ -28,13 +30,15 @@ export function ArticleCard({
   onApprove,
   onSave,
   onDelete,
+  defaultEditing = false,
 }: {
   article: Article;
   onApprove: (id: string, scheduledISO: string) => Promise<void>;
   onSave: (id: string, patch: Partial<Article>) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  defaultEditing?: boolean;
 }) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(defaultEditing);
   const [title, setTitle] = useState(article.title);
   const [excerpt, setExcerpt] = useState(article.excerpt);
   const [body, setBody] = useState(article.body);
