@@ -4,7 +4,7 @@
  *   publishDue      : ดึง scheduled ที่ถึงเวลา → โพสต์เว็บ+FB → published + ยืนยันเข้า LINE
  *   stockCheck      : นับที่รอปล่อย ถ้าต่ำกว่าเกณฑ์ → แจ้งเตือน LINE
  */
-import { claudeReady, contentTheme, geminiReady, textProvider } from "./env";
+import { claudeReady, contentTheme, geminiReady, publishEnabled, textProvider } from "./env";
 import { generateWithClaude } from "./claude";
 import { generateWithGemini } from "./gemini";
 import { pollinationsUrl } from "./pollinations";
@@ -124,6 +124,10 @@ export async function ingestArticle(input: {
 
 /** ปล่อยบทความที่ถึงเวลา (โพสต์เว็บ + FB) */
 export async function publishDue(nowISO?: string): Promise<Article[]> {
+  // 🔒 สวิตช์นิรภัย — ถ้ายังไม่เปิด PUBLISH_ENABLED จะไม่ปล่อยจริง (กันโพสต์ลงเพจโดยไม่ตั้งใจ)
+  if (!publishEnabled()) {
+    return [];
+  }
   const now = nowISO || new Date().toISOString();
   const due = await listDue(now);
   const published: Article[] = [];

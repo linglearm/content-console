@@ -14,6 +14,7 @@ interface ServiceStatus {
   line: boolean;
   facebook: boolean;
   textProvider: string;
+  publishEnabled: boolean;
 }
 
 export function AdminDashboard() {
@@ -132,9 +133,14 @@ export function AdminDashboard() {
               </span>
             ))}
           </div>
-          {[status.supabase, status.claude, status.line, status.facebook].some((x) => !x) && (
-            <p className="mt-2 text-amber-600">
-              ⚠️ ยังมีบริการที่เป็น mock — เติม key ใน .env (ดู README) เพื่อใช้งานจริงในเฟส 2
+          <p className={`mt-2 font-medium ${status.publishEnabled ? "text-green-600" : "text-red-600"}`}>
+            {status.publishEnabled
+              ? "🟢 การปล่อยจริงเปิดอยู่ — บทความที่ถึงเวลาจะโพสต์ลงเว็บ + เพจ SiamAthlete จริง"
+              : "🔴 การปล่อยจริงปิดอยู่ (PUBLISH_ENABLED=false) — ยังไม่โพสต์ลงเพจจริง (รอเจ้าของเปิดสวิตช์)"}
+          </p>
+          {[status.supabase, status.line, status.facebook].some((x) => !x) && (
+            <p className="mt-1 text-amber-600">
+              ⚠️ ยังมีบริการที่เป็น mock — เติม key ใน .env (ดู README)
             </p>
           )}
         </div>

@@ -63,6 +63,15 @@ export function textProvider(): "claude" | "gemini" {
   return (process.env.TEXT_PROVIDER || "claude").toLowerCase() === "gemini" ? "gemini" : "claude";
 }
 
+/**
+ * สวิตช์นิรภัย: อนุญาตให้ "ปล่อยจริง" (โพสต์เว็บ + Facebook) ไหม
+ * ค่าเริ่มต้น = ปิด (false) — publishDue จะไม่ทำอะไรจนกว่าตั้ง PUBLISH_ENABLED=true
+ * ใช้กันการโพสต์ลงเพจจริงโดยไม่ตั้งใจระหว่างพัฒนา/ทดสอบ
+ */
+export function publishEnabled(): boolean {
+  return (process.env.PUBLISH_ENABLED || "").toLowerCase() === "true";
+}
+
 /** ธีม/แนวเนื้อหาของแบรนด์ (SiamAthlete: ฟิตเนส/เพาะกาย/วิทย์การออกกำลังกาย/โภชนาการ) */
 export function contentTheme(): string {
   return (
@@ -81,5 +90,6 @@ export function serviceStatus() {
     line: lineReady(),
     facebook: facebookReady(),
     textProvider: textProvider(),
+    publishEnabled: publishEnabled(),
   };
 }
