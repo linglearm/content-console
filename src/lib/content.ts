@@ -10,7 +10,7 @@ import { generateWithGemini } from "./gemini";
 import { pollinationsUrl } from "./pollinations";
 import { postToPage, fbPostUrl } from "./facebook";
 import { pushToGroup, pushFlexToGroup } from "./line";
-import { buildDraftFlex } from "./flex";
+import { buildDraftFlex, buildPublishedFlex } from "./flex";
 import {
   addLineMessage,
   countScheduled,
@@ -145,16 +145,17 @@ export async function publishDue(nowISO?: string): Promise<Article[]> {
     });
     if (updated) published.push(updated);
 
-    // ยืนยันเข้ากลุ่ม LINE — แจ้งว่าโพสต์ลงเพจแล้ว พร้อมลิงก์กดไปดูโพสต์จริง
+    // ยืนยันเข้ากลุ่ม LINE — การ์ด Flex มีปุ่ม 📘 เปิดโพสต์บนเพจ + 🌐 อ่านบนเว็บ
     const postUrl = fbPostUrl(fb.postId);
-    const confirm =
+    const card = buildPublishedFlex(a, link, postUrl);
+    const sentLive = await pushFlexToGroup(card.altText, card.contents);
+    const outboxText =
       `✅ โพสต์ลงเพจแล้ว: ${a.title}\n` +
       `เว็บ: ${link}\n` +
       (fb.posted
         ? `เพจ FB: ${postUrl || `โพสต์แล้ว (id: ${fb.postId})`}`
         : `เพจ FB: [mock] จำลองโพสต์ (id: ${fb.postId})`);
-    const sentLive = await pushToGroup(confirm);
-    await addLineMessage("publish_confirm", (sentLive ? "" : "[mock] ") + confirm, a.id);
+    await addLineMessage("publish_confirm", (sentLive ? "" : "[mock] ") + outboxText, a.id);
   }
 
   return published;
