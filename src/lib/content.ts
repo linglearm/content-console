@@ -1,7 +1,7 @@
 /**
  * CONTENT — orchestration ของ 3 ฟังก์ชันหลัก
- *   generateArticle : เขียนบทความ + ทำรูป → บันทึก pending + ส่งดราฟต์เข้า LINE
- *   publishDue      : ดึง scheduled ที่ถึงเวลา → โพสต์เว็บ+FB → published + ยืนยันเข้า LINE
+ *   generateArticle : เขียนบทความ + ทำรูป → เข้าคิว scheduled อัตโนมัติ (ไม่ผ่าน approve)
+ *   publishDue      : ดึง scheduled ที่ถึงเวลา → โพสต์เว็บ+FB → published + แจ้งเตือน FYI เข้า LINE
  *   stockCheck      : นับที่รอปล่อย ถ้าต่ำกว่าเกณฑ์ → แจ้งเตือน LINE
  */
 import {
@@ -20,8 +20,7 @@ import { generateWithGemini } from "./gemini";
 import { pollinationsUrl } from "./pollinations";
 import { stockImageUrl } from "./stockImages";
 import { postToPage, fbPostUrl } from "./facebook";
-import { pushToGroup, pushFlexToGroup } from "./line";
-import { buildPublishedFlex } from "./flex";
+import { pushToGroup } from "./line";
 import {
   addLineMessage,
   countScheduled,
@@ -179,17 +178,16 @@ export async function publishDue(nowISO?: string): Promise<Article[]> {
     });
     if (updated) published.push(updated);
 
-    // ยืนยันเข้ากลุ่ม LINE — การ์ด Flex มีปุ่ม 📘 เปิดโพสต์บนเพจ + 🌐 อ่านบนเว็บ
+    // แจ้งเตือน FYI เข้ากลุ่ม LINE — ข้อความล้วน ไม่มีปุ่ม/ไม่มีอนุมัติ (ตามที่เจ้าของสั่ง)
     const postUrl = fbPostUrl(fb.postId);
-    const card = buildPublishedFlex(a, link, postUrl);
-    const sentLive = await pushFlexToGroup(card.altText, card.contents);
-    const outboxText =
+    const fyi =
       `✅ โพสต์ลงเพจแล้ว: ${a.title}\n` +
-      `เว็บ: ${link}\n` +
       (fb.posted
-        ? `เพจ FB: ${postUrl || `โพสต์แล้ว (id: ${fb.postId})`}`
-        : `เพจ FB: [mock] จำลองโพสต์ (id: ${fb.postId})`);
-    await addLineMessage("publish_confirm", (sentLive ? "" : "[mock] ") + outboxText, a.id);
+        ? `เพจ FB: ${postUrl || `โพสต์แล้ว (id: ${fb.postId})`}\n`
+        : `เพจ FB: [mock] จำลองโพสต์ (id: ${fb.postId})\n`) +
+      `เว็บ: ${link}`;
+    const sentLive = await pushToGroup(fyi);
+    await addLineMessage("publish_confirm", (sentLive ? "" : "[mock] ") + fyi, a.id);
   }
 
   return published;
