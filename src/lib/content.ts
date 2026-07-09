@@ -15,7 +15,7 @@ import {
   publishEnabled,
   textProvider,
 } from "./env";
-import { computePlan, firstOpenSlot, type BufferPlan } from "./schedule";
+import { computePlan, firstOpenSlot, isCanonicalSlot, type BufferPlan } from "./schedule";
 import { generateWithClaude } from "./claude";
 import { generateWithGemini } from "./gemini";
 import { pollinationsUrl } from "./pollinations";
@@ -188,6 +188,12 @@ export async function publishDue(nowISO?: string): Promise<Article[]> {
   const published: Article[] = [];
 
   for (const a of due) {
+    // 🔒 กันการ re-time ผิดปกติ — ปล่อยเฉพาะรายการที่ scheduled_at ตรงช่องเวลามาตรฐาน (เวลาไทย 10/16/19/21)
+    // ถ้ามี job/ตัวเก่าดัน scheduled_at ให้กระจุกผิดแพทเทิร์น (เช่นทุก ~14 นาที) จะข้าม ไม่ปล่อยขึ้นเพจ
+    if (!isCanonicalSlot(a.scheduled_at, postTimes())) {
+      console.warn(`[publishDue] ข้าม slot ผิดแพทเทิร์น scheduled_at=${a.scheduled_at} id=${a.id} title="${a.title}"`);
+      continue;
+    }
     // Atomic claim before posting: flip scheduled->published only if still scheduled.
     // If another process (cron colliding with a manual trigger) grabbed it first, we get
     // null and skip -- so Facebook is never posted twice.

@@ -112,6 +112,23 @@ export function computePlan(
   };
 }
 
+/**
+ * เช็กว่า scheduled_at ตรงกับ "ช่องเวลามาตรฐาน" ไหม (เวลาไทยตรงกับ postTimes เป๊ะ นาที = 00)
+ * ใช้กันการ re-time ผิดปกติ (เช่น bug ที่ดันเวลาเป็นทุก ~14 นาที) ไม่ให้ถูกปล่อยขึ้นเพจ
+ */
+export function isCanonicalSlot(iso: string | null, times: string[]): boolean {
+  if (!iso) return false;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return false;
+  const b = new Date(d.getTime() + TZ_OFFSET_MIN * 60000); // เวลาไทยเสมือน UTC
+  const hh = b.getUTCHours();
+  const mm = b.getUTCMinutes();
+  return times.some((t) => {
+    const [hStr, mStr] = t.split(":");
+    return hh === Number(hStr) && mm === Number(mStr || 0);
+  });
+}
+
 /** ช่องว่างแรกสุด (ใช้ตอน ingest ไม่ได้ระบุ scheduled_at มา) — ขยายเกิน targetDays ได้ถ้าเต็ม */
 export function firstOpenSlot(scheduled: Article[], now: Date, times: string[], maxDays: number): string {
   const slots = buildSlots(now, maxDays, times);
