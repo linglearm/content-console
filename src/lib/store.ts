@@ -99,6 +99,33 @@ export async function updateArticle(id: string, patch: Partial<Article>): Promis
   return a;
 }
 
+/**
+ * Atomic claim to publish an article -- prevents double posting when several
+ * processes run at once (e.g. Vercel cron colliding with a manual /api/publish-due call).
+ * Flips status scheduled->published and sets published_at ONLY for a row still "scheduled".
+ * The .eq("status","scheduled") condition runs inside one UPDATE, so Postgres row-locks it.
+ * Only the first caller gets the Article back; a later caller gets null and must skip (no re-post).
+ */
+export async function claimForPublish(id: string, nowISO: string): Promise<Article | null> {
+  if (supabaseReady()) {
+    const { data, error } = await supabaseService()
+      .from(T.articles)
+      .update({ status: "published", published_at: nowISO })
+      .eq("id", id)
+      .eq("status", "scheduled")
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    return (data as Article) || null;
+  }
+  // mock: single JS thread, so read-then-write here is already atomic
+  const a = db().articles.find((x) => x.id === id);
+  if (!a || a.status !== "scheduled") return null;
+  a.status = "published";
+  a.published_at = nowISO;
+  return a;
+}
+
 export async function deleteArticle(id: string): Promise<void> {
   if (supabaseReady()) {
     const { error } = await supabaseService().from(T.articles).delete().eq("id", id);

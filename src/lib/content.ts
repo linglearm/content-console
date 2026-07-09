@@ -20,10 +20,11 @@ import { generateWithClaude } from "./claude";
 import { generateWithGemini } from "./gemini";
 import { pollinationsUrl } from "./pollinations";
 import { stockImageUrl } from "./stockImages";
-import { postToPage, fbPostUrl, commentOnPost } from "./facebook";
+import { postToPage, fbPostUrl, commentOnPost, type FbPostResult } from "./facebook";
 import { pushToGroup } from "./line";
 import {
   addLineMessage,
+  claimForPublish,
   countScheduled,
   createArticle,
   getSettings,
@@ -187,12 +188,31 @@ export async function publishDue(nowISO?: string): Promise<Article[]> {
   const published: Article[] = [];
 
   for (const a of due) {
+    // Atomic claim before posting: flip scheduled->published only if still scheduled.
+    // If another process (cron colliding with a manual trigger) grabbed it first, we get
+    // null and skip -- so Facebook is never posted twice.
+    const claimed = await claimForPublish(a.id, now);
+    if (!claimed) continue;
+
     const link = `${siteUrl()}/article/${a.id}`;
 
-    // โพสต์เนื้อหาเต็มลง Facebook Fanpage (รูป + แคปชั่นเต็ม; mock จะคืน postId ปลอม)
-    const fb = await postToPage(a.body, { imageUrl: a.image_url || undefined, link });
+    // Post the full article to the Facebook page (photo + full caption; mock returns a fake postId).
+    // If the FB post throws, the row is already marked published (dedupe) -- log the error and move on
+    // so one failure does not abort the whole batch.
+    let fb: FbPostResult;
+    try {
+      fb = await postToPage(a.body, { imageUrl: a.image_url || undefined, link });
+    } catch (e) {
+      await addLineMessage(
+        "publish_confirm",
+        `FB post failed: ${a.title}\n${(e as Error).message}\n${link}`,
+        a.id
+      );
+      published.push(claimed);
+      continue;
+    }
 
-    // คอมเมนต์ใต้โพสต์ (เรียงลำดับ) — คอมเมนต์พลาดก็ไม่ทำให้ publish ล้ม
+    // Comments under the post (in order) -- a failed comment must not fail publish.
     if (fb.posted) {
       // คอมเมนต์ที่ 1 = แหล่งอ้างอิง (ถ้ามี)
       if (a.refs) {
@@ -208,11 +228,8 @@ export async function publishDue(nowISO?: string): Promise<Article[]> {
       }
     }
 
-    const updated = await updateArticle(a.id, {
-      status: "published",
-      published_at: now,
-      fb_post_id: fb.postId,
-    });
+    // claim already set status=published + published_at -- here we only add fb_post_id
+    const updated = await updateArticle(a.id, { fb_post_id: fb.postId });
     if (updated) published.push(updated);
 
     // แจ้งเตือน FYI เข้ากลุ่ม LINE — ข้อความล้วน ไม่มีปุ่ม/ไม่มีอนุมัติ (ตามที่เจ้าของสั่ง)
