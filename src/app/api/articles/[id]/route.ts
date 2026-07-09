@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { deleteArticle, getArticle, updateArticle } from "@/lib/store";
-import { isCanonicalSlot } from "@/lib/schedule";
-import { postTimes } from "@/lib/env";
 import { cronAuthorized } from "@/lib/cron";
 import type { Article } from "@/lib/types";
 
@@ -35,17 +33,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (typeof body[key] === "string") patch[key] = body[key];
   }
   if (typeof body.scheduled_at === "string" || body.scheduled_at === null) {
-    // 🔒 กันการ re-time ผิดปกติ — ถ้าตั้ง scheduled_at ต้องตรงช่องเวลามาตรฐาน (เวลาไทย 10/16/19/21)
-    // ปฏิเสธค่าที่ผิดแพทเทิร์น (เช่น job/ตัวเก่าดันเวลาให้กระจุกทุก ~14 นาที) เพื่อไม่ให้คิวถูกทำลาย
-    if (typeof body.scheduled_at === "string" && !isCanonicalSlot(body.scheduled_at, postTimes())) {
-      return NextResponse.json(
-        {
-          error: `scheduled_at ต้องตรงช่องเวลามาตรฐาน (${postTimes().join(" ")} เวลาไทย) — ปฏิเสธค่าที่ผิดแพทเทิร์นเพื่อกันการ re-time`,
-          rejectedScheduledAt: body.scheduled_at,
-        },
-        { status: 422 }
-      );
-    }
+    // หมายเหตุ: การ re-time เพื่อ "โพสต์วันนี้" เป็นฟีเจอร์ที่เจ้าของสั่งได้ จึงไม่จำกัดค่าเวลา
+    // (การเขียนยังต้องมี x-cron-secret อยู่ — กันคนภายนอกที่ไม่มีสิทธิ์)
     patch.scheduled_at = body.scheduled_at;
   }
   if (typeof body.status === "string") {
