@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { deleteArticle, getArticle, updateArticle } from "@/lib/store";
 import { isCanonicalSlot } from "@/lib/schedule";
 import { postTimes } from "@/lib/env";
+import { cronAuthorized } from "@/lib/cron";
 import type { Article } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
  * ถ้าส่ง scheduled_at มาและ status ยัง pending → เปลี่ยนเป็น scheduled ให้อัตโนมัติ
  */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // 🔒 เขียนได้เฉพาะที่มี x-cron-secret — ปิดช่องให้ตัวภายนอกยิงแก้/re-time บทความไม่ได้
+  if (!cronAuthorized(req)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
   const { id } = await params;
   const existing = await getArticle(id);
   if (!existing) return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -55,7 +60,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   return NextResponse.json({ article: updated });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // 🔒 ลบได้เฉพาะที่มี x-cron-secret
+  if (!cronAuthorized(req)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
   const { id } = await params;
   await deleteArticle(id);
   return NextResponse.json({ ok: true });
