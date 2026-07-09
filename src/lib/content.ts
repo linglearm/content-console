@@ -10,6 +10,7 @@ import {
   claudeReady,
   contentTheme,
   geminiReady,
+  lineOaUrl,
   postTimes,
   publishEnabled,
   textProvider,
@@ -36,6 +37,14 @@ export interface GeneratedArticle {
   title: string;
   body: string;
   excerpt: string;
+}
+
+/** ช่องเวลานี้ถูกจองแล้ว — โยนเพื่อกันบทความซ้อน slot เดียวกัน (double-post) */
+export class SlotTakenError extends Error {
+  constructor(public slot: string) {
+    super(`ช่องเวลา ${slot} ถูกจองแล้ว (กันโพสต์ซ้อน)`);
+    this.name = "SlotTakenError";
+  }
 }
 
 function siteUrl(): string {
@@ -95,12 +104,20 @@ async function scheduleArticle(input: {
   refs?: string | null;
   scheduled_at?: string;
 }): Promise<Article> {
+  const scheduled = await listArticles({ status: "scheduled" });
   let scheduled_at = (input.scheduled_at || "").toString().trim();
   if (!scheduled_at) {
-    const scheduled = await listArticles({ status: "scheduled" });
     scheduled_at = firstOpenSlot(scheduled, new Date(), postTimes(), bufferTargetDays() + 3);
   } else {
     scheduled_at = new Date(scheduled_at).toISOString(); // normalize
+  }
+  // 🔒 กันโพสต์ซ้อน — ถ้ามีบทความจองช่องเวลานี้ไว้แล้ว (นาทีเดียวกัน) ไม่รับซ้ำ
+  const slotMin = Math.floor(new Date(scheduled_at).getTime() / 60000);
+  const taken = scheduled.some(
+    (x) => x.scheduled_at && Math.floor(new Date(x.scheduled_at).getTime() / 60000) === slotMin
+  );
+  if (taken) {
+    throw new SlotTakenError(scheduled_at);
   }
   const article = await createArticle({
     topic: input.topic,
@@ -175,9 +192,20 @@ export async function publishDue(nowISO?: string): Promise<Article[]> {
     // โพสต์เนื้อหาเต็มลง Facebook Fanpage (รูป + แคปชั่นเต็ม; mock จะคืน postId ปลอม)
     const fb = await postToPage(a.body, { imageUrl: a.image_url || undefined, link });
 
-    // แหล่งอ้างอิง → คอมเมนต์ใต้โพสต์ (ไม่ใส่ในตัวโพสต์) — พลาดก็ไม่ทำให้ publish ล้ม
-    if (a.refs && fb.posted) {
-      await commentOnPost(fb.postId, a.refs);
+    // คอมเมนต์ใต้โพสต์ (เรียงลำดับ) — คอมเมนต์พลาดก็ไม่ทำให้ publish ล้ม
+    if (fb.posted) {
+      // คอมเมนต์ที่ 1 = แหล่งอ้างอิง (ถ้ามี)
+      if (a.refs) {
+        await commentOnPost(fb.postId, a.refs);
+      }
+      // คอมเมนต์ที่ 2 = ลิงก์แอด LINE OA (ปิดการขาย/ให้ติดต่อ)
+      const oa = lineOaUrl();
+      if (oa) {
+        await commentOnPost(
+          fb.postId,
+          `สนใจ PED AAS เสื้อผ้ากีฬา หรืออาหารเสริม แอดไลน์มาคุยกันได้เลย 👉 ${oa}`
+        );
+      }
     }
 
     const updated = await updateArticle(a.id, {

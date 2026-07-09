@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ingestArticle } from "@/lib/content";
+import { ingestArticle, SlotTakenError } from "@/lib/content";
 import { cronAuthorized } from "@/lib/cron";
 
 export const dynamic = "force-dynamic";
@@ -37,6 +37,10 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ article });
   } catch (e) {
+    // ช่องเวลาถูกจองแล้ว → 409 (ตัวปั่นควรข้าม slot นี้ ไม่ใช่ error ระบบ)
+    if (e instanceof SlotTakenError) {
+      return NextResponse.json({ error: e.message, slotTaken: true }, { status: 409 });
+    }
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 }

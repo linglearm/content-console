@@ -90,6 +90,11 @@ export function bufferMinDays(): number {
   return Math.max(1, Number(process.env.BUFFER_MIN_DAYS || 3));
 }
 
+/** ลิงก์แอดเพื่อน LINE OA ของ SiamAthlete (ใช้โพสต์เป็นคอมเมนต์ที่ 2 ใต้โพสต์เพจ) */
+export function lineOaUrl(): string {
+  return (process.env.NEXT_PUBLIC_LINE_OA_URL || "https://line.me/R/ti/p/@494hxjay").trim();
+}
+
 /** ธีม/แนวเนื้อหาของแบรนด์ (SiamAthlete: ฟิตเนส/เพาะกาย/วิทย์การออกกำลังกาย/โภชนาการ) */
 export function contentTheme(): string {
   return (
