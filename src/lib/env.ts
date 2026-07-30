@@ -72,22 +72,43 @@ export function publishEnabled(): boolean {
   return (process.env.PUBLISH_ENABLED || "").toLowerCase() === "true";
 }
 
-/** เวลาโพสต์ต่อวัน (Asia/Bangkok, รูปแบบ HH:MM) — จำนวน = โพสต์ต่อวัน */
+/**
+ * เวลา "การ์ดรออนุมัติเข้ากลุ่ม LINE" ต่อวัน (Asia/Bangkok, รูปแบบ HH:MM) — จำนวน = การ์ดต่อวัน
+ * ไม่ใช่เวลาโพสต์: โพสต์ขึ้นเพจตอนเจ้าของกด ✅ ในกลุ่ม (ดู releaseDue/approveArticle)
+ */
 export function postTimes(): string[] {
-  return (process.env.POST_TIMES || "10:00,16:00,19:00,21:00")
+  return (process.env.POST_TIMES || "11:00,14:00,16:00,20:00")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
 }
 
-/** buffer: เตรียมโพสต์ล่วงหน้ากี่วัน (เป้า) */
-export function bufferTargetDays(): number {
-  return Math.max(1, Number(process.env.BUFFER_TARGET_DAYS || 5));
+/** คลัง buffer: เก็บบทความรอไว้กี่ชิ้น (เป้า) */
+export function bufferTargetItems(): number {
+  return Math.max(1, Number(process.env.BUFFER_TARGET_ITEMS || 10));
 }
 
-/** buffer: ถ้าคิวเหลือน้อยกว่ากี่วัน จึงเติมใหม่ */
-export function bufferMinDays(): number {
-  return Math.max(1, Number(process.env.BUFFER_MIN_DAYS || 3));
+/** คลัง buffer: เหลือน้อยกว่ากี่ชิ้นจึงเติมใหม่ */
+export function bufferMinItems(): number {
+  return Math.max(1, Number(process.env.BUFFER_MIN_ITEMS || 4));
+}
+
+/** ความยาวบทความที่ยอมรับ (ตัวอักษร นับช่องว่าง) — ตีกลับถ้าไม่เข้าเกณฑ์ */
+export function bodyLenRange(): { min: number; max: number } {
+  return {
+    min: Math.max(1, Number(process.env.BODY_MIN_CHARS || 1500)),
+    max: Math.max(2, Number(process.env.BODY_MAX_CHARS || 2000)),
+  };
+}
+
+/** คลังรูปฟรี — Pexels/Unsplash (ไม่มีคีย์ = ตกไปใช้รูปสต็อกในโค้ด) */
+export function pexelsReady(): boolean {
+  if (forceMock()) return false;
+  return hasReal(process.env.PEXELS_API_KEY);
+}
+export function unsplashReady(): boolean {
+  if (forceMock()) return false;
+  return hasReal(process.env.UNSPLASH_ACCESS_KEY);
 }
 
 /** ลิงก์แอดเพื่อน LINE OA ของ SiamAthlete (ใช้โพสต์เป็นคอมเมนต์ที่ 2 ใต้โพสต์เพจ) */
@@ -114,5 +135,7 @@ export function serviceStatus() {
     facebook: facebookReady(),
     textProvider: textProvider(),
     publishEnabled: publishEnabled(),
+    pexels: pexelsReady(),
+    unsplash: unsplashReady(),
   };
 }

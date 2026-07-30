@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ingestArticle, SlotTakenError } from "@/lib/content";
+import { BodyLengthError, DuplicateTopicError, ingestArticle, SlotTakenError } from "@/lib/content";
 import { cronAuthorized } from "@/lib/cron";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
       body,
       excerpt: b.excerpt,
       image_url: b.image_url,
+      image_query: b.image_query,
       refs,
       scheduled_at: b.scheduled_at,
     });
@@ -40,6 +41,17 @@ export async function POST(req: NextRequest) {
     // ช่องเวลาถูกจองแล้ว → 409 (ตัวปั่นควรข้าม slot นี้ ไม่ใช่ error ระบบ)
     if (e instanceof SlotTakenError) {
       return NextResponse.json({ error: e.message, slotTaken: true }, { status: 409 });
+    }
+    // หัวข้อซ้ำ → 409 (routine ต้องเปลี่ยนหัวข้อแล้วส่งใหม่)
+    if (e instanceof DuplicateTopicError) {
+      return NextResponse.json({ error: e.message, duplicate: true, existing: e.existing }, { status: 409 });
+    }
+    // ความยาวไม่เข้าเกณฑ์ → 422 (routine ต้องเขียนใหม่ให้ได้ช่วงที่กำหนด)
+    if (e instanceof BodyLengthError) {
+      return NextResponse.json(
+        { error: e.message, badLength: true, len: e.len, min: e.min, max: e.max },
+        { status: 422 }
+      );
     }
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }

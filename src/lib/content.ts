@@ -1,16 +1,22 @@
 /**
- * CONTENT — orchestration ของ 3 ฟังก์ชันหลัก
- *   generateArticle : เขียนบทความ + ทำรูป → เข้าคิว scheduled อัตโนมัติ (ไม่ผ่าน approve)
- *   publishDue      : ดึง scheduled ที่ถึงเวลา → โพสต์เว็บ+FB → published + แจ้งเตือน FYI เข้า LINE
- *   stockCheck      : นับที่รอปล่อย ถ้าต่ำกว่าเกณฑ์ → แจ้งเตือน LINE
+ * CONTENT — orchestration ของวงจรบทความ (ทุกโพสต์ต้องผ่านการอนุมัติในกลุ่ม LINE)
+ *
+ *   ingestArticle  : รับบทความจาก Claude routine → ตรวจความยาว/กันหัวข้อซ้ำ → เข้าคลัง (pending)
+ *                    พร้อมจอง "เวลาที่การ์ดจะเข้ากลุ่ม" (scheduled_at)
+ *   releaseDue     : ถึงเวลา 11/14/16/20 → pending → scheduled + ยิงการ์ดรออนุมัติเข้ากลุ่ม LINE
+ *   approveArticle : เจ้าของกด ✅ → โพสต์ลงเพจ FB + คอมเมนต์ + ขึ้นเว็บ → published
+ *   rejectArticle  : เจ้าของกด 🚫 → rejected (คลังชิ้นถัดไปมาตามคิวเวลาปกติ)
+ *   stockCheck     : คลังเหลือน้อยกว่าเกณฑ์ → เตือนเข้ากลุ่ม LINE
  */
 import {
-  bufferMinDays,
-  bufferTargetDays,
+  bodyLenRange,
+  bufferMinItems,
+  bufferTargetItems,
   claudeReady,
   contentTheme,
   geminiReady,
   lineOaUrl,
+  lineReady,
   postTimes,
   publishEnabled,
   textProvider,
@@ -20,16 +26,21 @@ import { generateWithClaude } from "./claude";
 import { generateWithGemini } from "./gemini";
 import { pollinationsUrl } from "./pollinations";
 import { stockImageUrl } from "./stockImages";
+import { findFreeImage } from "./images";
 import { postToPage, fbPostUrl, commentOnPost, type FbPostResult } from "./facebook";
-import { pushToGroup } from "./line";
+import { pushToGroup, pushFlexToGroup } from "./line";
+import { buildDraftFlex } from "./flex";
 import {
   addLineMessage,
   claimForPublish,
-  countScheduled,
+  claimForRelease,
+  countPending,
   createArticle,
+  getArticle,
   getSettings,
-  listArticles,
-  listDue,
+  listAllTopics,
+  listPendingDue,
+  listQueued,
   updateArticle,
 } from "./store";
 import type { Article } from "./types";
@@ -46,6 +57,47 @@ export class SlotTakenError extends Error {
     super(`ช่องเวลา ${slot} ถูกจองแล้ว (กันโพสต์ซ้อน)`);
     this.name = "SlotTakenError";
   }
+}
+
+/** ความยาวบทความไม่เข้าเกณฑ์ (นับตัวอักษรรวมช่องว่าง) */
+export class BodyLengthError extends Error {
+  constructor(public len: number, public min: number, public max: number) {
+    super(`ความยาว ${len} ตัวอักษร ไม่เข้าเกณฑ์ ${min}-${max} (นับช่องว่าง)`);
+    this.name = "BodyLengthError";
+  }
+}
+
+/** หัวข้อนี้เคยเขียนไปแล้ว — กันคอนเทนต์ซ้ำบนเพจ */
+export class DuplicateTopicError extends Error {
+  constructor(public existing: string) {
+    super(`หัวข้อนี้เคยเขียนไปแล้ว: ${existing}`);
+    this.name = "DuplicateTopicError";
+  }
+}
+
+/** ตัดคำช่วย/อักขระ เพื่อเทียบหัวข้อซ้ำแบบหยาบ ๆ (กันแค่ตั้งชื่อต่างกันเล็กน้อย) */
+function normalizeTopic(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/** ซ้ำกับที่เคยเขียนไหม — เทียบทั้ง topic และ title กับทุกสถานะ (รวม published/rejected) */
+async function findDuplicate(topic: string, title: string): Promise<string | null> {
+  const wanted = [normalizeTopic(topic), normalizeTopic(title)].filter(Boolean);
+  const rows = await listAllTopics();
+  for (const r of rows) {
+    const cand = [normalizeTopic(r.topic), normalizeTopic(r.title)];
+    for (const w of wanted) {
+      if (!w) continue;
+      // ตรงกันเป๊ะ หรือชื่อหนึ่งกินอีกชื่อทั้งก้อน (เช่นเติมคำท้าย) = ถือว่าซ้ำ
+      if (cand.some((c) => c && (c === w || (w.length > 12 && (c.includes(w) || w.includes(c)))))) {
+        return `${r.title} (${r.status})`;
+      }
+    }
+  }
+  return null;
 }
 
 function siteUrl(): string {
@@ -91,12 +143,11 @@ async function writeText(topic: string): Promise<GeneratedArticle> {
 // ---------------------------------------------------------------------------
 
 /**
- * หัวใจกลาง — เพิ่มบทความ "เข้าคิว schedule" (ทุกทางเพิ่มโพสต์ต้องผ่านที่นี่)
- * ตั้ง status=scheduled + scheduled_at ทันที (ใช้ slot ที่ส่งมา หรือหาช่องว่างถัดไปในคิว)
- * ไม่มีสถานะ pending / ไม่ส่งการ์ด approve เข้า LINE — โพสต์จะขึ้นเพจอัตโนมัติผ่าน Vercel Cron
- * แล้วค่อยแจ้ง LINE ตอน "ขึ้นเพจแล้ว" (ใน publishDue)
+ * หัวใจกลาง — เพิ่มบทความ "เข้าคลัง buffer" (ทุกทางเพิ่มโพสต์ต้องผ่านที่นี่)
+ * ตั้ง status=pending + scheduled_at = เวลาที่การ์ดรออนุมัติจะเข้ากลุ่ม LINE
+ * (ไม่ใช่เวลาโพสต์ — โพสต์เกิดตอนเจ้าของกด ✅ ใน approveArticle)
  */
-async function scheduleArticle(input: {
+async function bufferArticle(input: {
   topic: string;
   title: string;
   body: string;
@@ -105,16 +156,16 @@ async function scheduleArticle(input: {
   refs?: string | null;
   scheduled_at?: string;
 }): Promise<Article> {
-  const scheduled = await listArticles({ status: "scheduled" });
+  const queued = await listQueued();
   let scheduled_at = (input.scheduled_at || "").toString().trim();
   if (!scheduled_at) {
-    scheduled_at = firstOpenSlot(scheduled, new Date(), postTimes(), bufferTargetDays() + 3);
+    scheduled_at = firstOpenSlot(queued, new Date(), postTimes(), bufferTargetItems() + 3);
   } else {
     scheduled_at = new Date(scheduled_at).toISOString(); // normalize
   }
-  // 🔒 กันโพสต์ซ้อน — ถ้ามีบทความจองช่องเวลานี้ไว้แล้ว (นาทีเดียวกัน) ไม่รับซ้ำ
+  // 🔒 กันการ์ดซ้อน — ถ้ามีบทความจองช่องเวลานี้ไว้แล้ว (นาทีเดียวกัน) ไม่รับซ้ำ
   const slotMin = Math.floor(new Date(scheduled_at).getTime() / 60000);
-  const taken = scheduled.some(
+  const taken = queued.some(
     (x) => x.scheduled_at && Math.floor(new Date(x.scheduled_at).getTime() / 60000) === slotMin
   );
   if (taken) {
@@ -127,7 +178,7 @@ async function scheduleArticle(input: {
     excerpt: input.excerpt,
     image_url: input.image_url,
     refs: input.refs ?? null,
-    status: "scheduled",
+    status: "pending",
   });
   const updated = await updateArticle(article.id, { scheduled_at });
   return updated || { ...article, scheduled_at };
@@ -139,7 +190,7 @@ async function scheduleArticle(input: {
  */
 export async function generateArticle(topic: string): Promise<Article> {
   const gen = await writeText(topic);
-  return scheduleArticle({
+  return bufferArticle({
     topic,
     title: gen.title,
     body: gen.body,
@@ -149,7 +200,11 @@ export async function generateArticle(topic: string): Promise<Article> {
 }
 
 /**
- * รับบทความ "สำเร็จรูป" จาก Claude routine → เข้าคิวปล่อยอัตโนมัติ (ไม่ผ่าน approve)
+ * รับบทความ "สำเร็จรูป" จาก Claude routine → เข้าคลัง buffer รอส่งการ์ดอนุมัติตามเวลา
+ * ด่านตรวจก่อนรับเข้าคลัง (ตีกลับเป็น error ให้ routine แก้แล้วส่งใหม่):
+ *   - ความยาว body ต้องอยู่ในช่วง BODY_MIN_CHARS..BODY_MAX_CHARS (นับช่องว่าง)
+ *   - หัวข้อต้องไม่ซ้ำกับที่เคยเขียน (ทุกสถานะ รวม published/rejected)
+ * รูปปก: ไม่ส่ง image_url มา → หารูปฟรีจาก Pexels/Unsplash ด้วย image_query (ไม่มีคีย์ = รูปสต็อกในโค้ด)
  */
 export async function ingestArticle(input: {
   topic: string;
@@ -157,97 +212,137 @@ export async function ingestArticle(input: {
   body: string;
   excerpt?: string;
   image_url?: string;
+  image_query?: string; // คำค้นภาษาอังกฤษสำหรับหารูปฟรี
   refs?: string | null; // แหล่งอ้างอิง (คั่นบรรทัด) → คอมเมนต์ใต้โพสต์ FB
   scheduled_at?: string; // slot ที่ routine กำหนด (UTC ISO); ไม่ส่งมา = หาช่องว่างถัดไปเอง
 }): Promise<Article> {
-  return scheduleArticle({
+  const { min, max } = bodyLenRange();
+  const len = input.body.length; // นับรวมช่องว่างตามที่เจ้าของกำหนด
+  if (len < min || len > max) {
+    throw new BodyLengthError(len, min, max);
+  }
+  const dup = await findDuplicate(input.topic, input.title);
+  if (dup) {
+    throw new DuplicateTopicError(dup);
+  }
+  const image_url =
+    (input.image_url || "").trim() ||
+    (await findFreeImage((input.image_query || "").trim() || input.topic, input.topic, input.title));
+
+  return bufferArticle({
     topic: input.topic,
     title: input.title,
     body: input.body,
     excerpt: (input.excerpt || "").trim() || deriveExcerpt(input.body),
-    image_url: (input.image_url || "").trim() || coverImage(input.topic, input.title),
+    image_url,
     refs: (input.refs || "").toString().trim() || null,
     scheduled_at: input.scheduled_at,
   });
 }
 
-/** สถานะคิว buffer (ให้ routine เช็กว่าต้องเติมไหม) */
+/** สถานะคลัง buffer (ให้ routine เช็กว่าต้องเติมไหม) */
 export async function getBufferPlan(): Promise<BufferPlan> {
-  const scheduled = await listArticles({ status: "scheduled" });
-  return computePlan(scheduled, new Date(), postTimes(), bufferTargetDays(), bufferMinDays());
+  const queued = await listQueued();
+  return computePlan(queued, new Date(), postTimes(), bufferTargetItems(), bufferMinItems());
 }
 
-/** ปล่อยบทความที่ถึงเวลา (โพสต์เว็บ + FB) */
-export async function publishDue(nowISO?: string): Promise<Article[]> {
-  // 🔒 สวิตช์นิรภัย — ถ้ายังไม่เปิด PUBLISH_ENABLED จะไม่ปล่อยจริง (กันโพสต์ลงเพจโดยไม่ตั้งใจ)
-  if (!publishEnabled()) {
-    return [];
-  }
+/**
+ * ถึงเวลาการ์ด (11/14/16/20) → หยิบบทความในคลังที่จองเวลานั้นไว้ → ยิงการ์ดรออนุมัติเข้ากลุ่ม LINE
+ * ยังไม่โพสต์อะไรลงเพจ — รอเจ้าของกด ✅ (approveArticle)
+ * ยิงการ์ดไม่สำเร็จ → คืนสถานะกลับ pending ให้ cron รอบถัดไปลองใหม่
+ */
+export async function releaseDue(nowISO?: string): Promise<{ released: Article[]; failed: number }> {
   const now = nowISO || new Date().toISOString();
-  const due = await listDue(now);
-  const published: Article[] = [];
+  const due = await listPendingDue(now);
+  const released: Article[] = [];
+  let failed = 0;
 
   for (const a of due) {
-    // Atomic claim before posting: flip scheduled->published only if still scheduled.
-    // If another process (cron colliding with a manual trigger) grabbed it first, we get
-    // null and skip -- so Facebook is never posted twice.
-    const claimed = await claimForPublish(a.id, now);
+    // claim ก่อนยิง — กันการ์ดซ้ำเมื่อ cron สองรอบทับกัน
+    const claimed = await claimForRelease(a.id);
     if (!claimed) continue;
 
-    const link = `${siteUrl()}/article/${a.id}`;
-
-    // Post the full article to the Facebook page (photo + full caption; mock returns a fake postId).
-    // If the FB post throws, the row is already marked published (dedupe) -- log the error and move on
-    // so one failure does not abort the whole batch.
-    let fb: FbPostResult;
-    try {
-      fb = await postToPage(a.body, { imageUrl: a.image_url || undefined, link });
-    } catch (e) {
-      await addLineMessage(
-        "publish_confirm",
-        `FB post failed: ${a.title}\n${(e as Error).message}\n${link}`,
-        a.id
-      );
-      published.push(claimed);
+    const flex = buildDraftFlex(claimed, siteUrl());
+    const sentLive = await pushFlexToGroup(flex.altText, flex.contents);
+    if (!sentLive && lineReady()) {
+      // LINE ของจริงแต่ยิงไม่ออก (token/เน็ต) → คืนเข้าคลัง รอบหน้าเอาใหม่
+      await updateArticle(a.id, { status: "pending" });
+      failed++;
       continue;
     }
-
-    // Comments under the post (in order) -- a failed comment must not fail publish.
-    if (fb.posted) {
-      // คอมเมนต์ที่ 1 = แหล่งอ้างอิง (ถ้ามี)
-      if (a.refs) {
-        await commentOnPost(fb.postId, a.refs);
-      }
-      // คอมเมนต์ที่ 2 = ลิงก์แอด LINE OA (ปิดการขาย/ให้ติดต่อ)
-      const oa = lineOaUrl();
-      if (oa) {
-        await commentOnPost(
-          fb.postId,
-          `สนใจ PED AAS เสื้อผ้ากีฬา หรืออาหารเสริม แอดไลน์มาคุยกันได้เลย 👉 ${oa}`
-        );
-      }
-    }
-
-    // claim already set status=published + published_at -- here we only add fb_post_id
-    const updated = await updateArticle(a.id, { fb_post_id: fb.postId });
-    if (updated) published.push(updated);
-
-    // แจ้งเตือน FYI เข้ากลุ่ม LINE — ข้อความล้วน ไม่มีปุ่ม/ไม่มีอนุมัติ (ตามที่เจ้าของสั่ง)
-    const postUrl = fbPostUrl(fb.postId);
-    const fyi =
-      `✅ โพสต์ลงเพจแล้ว: ${a.title}\n` +
-      (fb.posted
-        ? `เพจ FB: ${postUrl || `โพสต์แล้ว (id: ${fb.postId})`}\n`
-        : `เพจ FB: [mock] จำลองโพสต์ (id: ${fb.postId})\n`) +
-      `เว็บ: ${link}`;
-    const sentLive = await pushToGroup(fyi);
-    await addLineMessage("publish_confirm", (sentLive ? "" : "[mock] ") + fyi, a.id);
+    await addLineMessage("draft", (sentLive ? "" : "[mock] ") + `📝 การ์ดรออนุมัติ: ${claimed.title}`, claimed.id);
+    released.push(claimed);
   }
 
-  return published;
+  return { released, failed };
 }
 
-/** เช็กสต็อก — ต่ำกว่าเกณฑ์แจ้งเตือน LINE */
+/**
+ * เจ้าของกด ✅ ในกลุ่ม → โพสต์ลงเพจ FB + คอมเมนต์อ้างอิง + คอมเมนต์ลิงก์ LINE OA แล้วขึ้นเว็บ
+ * claim (scheduled→published) ก่อนโพสต์ → กดซ้ำ/สองคนกดพร้อมกันก็โพสต์ครั้งเดียว
+ * PUBLISH_ENABLED ยังไม่เปิด = ไม่โพสต์ ไม่เปลี่ยนสถานะ (คงรออนุมัติไว้ให้กดใหม่ทีหลัง)
+ */
+export async function approveArticle(id: string): Promise<{
+  ok: boolean;
+  error?: string;
+  article?: Article;
+  postUrl?: string;
+  link?: string;
+}> {
+  if (!publishEnabled()) {
+    return { ok: false, error: "PUBLISH_ENABLED ยังปิดอยู่ — ยังโพสต์ลงเพจจริงไม่ได้" };
+  }
+  const a = await getArticle(id);
+  if (!a) return { ok: false, error: "ไม่พบบทความนี้" };
+
+  const now = new Date().toISOString();
+  const claimed = await claimForPublish(id, now);
+  if (!claimed) {
+    return { ok: false, error: `บทความนี้ไม่ได้อยู่ในสถานะรออนุมัติแล้ว (${a.status})` };
+  }
+
+  const link = `${siteUrl()}/article/${a.id}`;
+  let fb: FbPostResult;
+  try {
+    fb = await postToPage(a.body, { imageUrl: a.image_url || undefined, link });
+  } catch (e) {
+    // โพสต์ล้มหลัง claim → คืนสถานะให้กดอนุมัติใหม่ได้ (ไม่ปล่อยค้างเป็น published ที่ไม่มีโพสต์)
+    await updateArticle(id, { status: "scheduled", published_at: null });
+    return { ok: false, error: `โพสต์ลงเพจไม่สำเร็จ: ${(e as Error).message}`, link };
+  }
+
+  // คอมเมนต์ใต้โพสต์ (best-effort — ล้มแล้วไม่กระทบการโพสต์)
+  if (fb.posted) {
+    if (a.refs) await commentOnPost(fb.postId, a.refs);
+    const oa = lineOaUrl();
+    if (oa) {
+      await commentOnPost(
+        fb.postId,
+        `สนใจ PED AAS เสื้อผ้ากีฬา หรืออาหารเสริม แอดไลน์มาคุยกันได้เลย 👉 ${oa}`
+      );
+    }
+  }
+
+  const updated = await updateArticle(id, { fb_post_id: fb.postId });
+  const postUrl = fbPostUrl(fb.postId);
+  await addLineMessage(
+    "publish_confirm",
+    `✅ อนุมัติแล้ว โพสต์ลงเพจ: ${a.title}\n${postUrl || fb.postId}\nเว็บ: ${link}`,
+    id
+  );
+  return { ok: true, article: updated || claimed, postUrl: postUrl || undefined, link };
+}
+
+/** เจ้าของกด 🚫 → ไม่อนุมัติ (คลังชิ้นถัดไปจะมาตามเวลาการ์ดรอบต่อไปตามปกติ) */
+export async function rejectArticle(id: string): Promise<{ ok: boolean; error?: string; article?: Article }> {
+  const a = await getArticle(id);
+  if (!a) return { ok: false, error: "ไม่พบบทความนี้" };
+  if (a.status === "published") return { ok: false, error: "บทความนี้โพสต์ลงเพจไปแล้ว" };
+  const updated = await updateArticle(id, { status: "rejected" });
+  return { ok: true, article: updated || a };
+}
+
+/** เช็กคลังบทความ — ต่ำกว่าเกณฑ์แจ้งเตือน LINE */
 export async function stockCheck(): Promise<{
   count: number;
   target: number;
@@ -255,14 +350,14 @@ export async function stockCheck(): Promise<{
   alerted: boolean;
 }> {
   const settings = await getSettings();
-  const count = await countScheduled();
+  const count = await countPending();
   let alerted = false;
 
   if (count < settings.stock_threshold) {
     const text =
-      `⚠️ สต็อกบทความใกล้หมด!\n` +
-      `รอปล่อย (scheduled): ${count} ชิ้น (เป้า ${settings.stock_target}, เกณฑ์เตือน < ${settings.stock_threshold})\n` +
-      `แนะนำให้สร้างบทความเพิ่มที่: ${siteUrl()}/admin`;
+      `⚠️ คลังบทความใกล้หมด!\n` +
+      `เหลือในคลัง (pending): ${count} ชิ้น (เป้า ${settings.stock_target}, เกณฑ์เตือน < ${settings.stock_threshold})\n` +
+      `ให้ routine เขียนเติม หรือดูที่: ${siteUrl()}/admin`;
     const sentLive = await pushToGroup(text);
     await addLineMessage("stock_alert", (sentLive ? "" : "[mock] ") + text);
     alerted = true;

@@ -26,6 +26,14 @@ export function AdminDashboard() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [editId, setEditId] = useState<string | null>(null); // จากลิงก์ ?edit=<id> (ปุ่มแก้ไขในการ์ด LINE)
+  // การเขียน (แก้ไข/เปลี่ยนรูป/ลบ) ถูกล็อกด้วย CRON_SECRET ฝั่ง API — เก็บไว้ในเครื่องนี้เครื่องเดียว
+  const [secret, setSecret] = useState("");
+
+  /** header สำหรับทุก request ที่ "เขียน" — ไม่มีรหัส API จะตอบ 401 */
+  const writeHeaders = useCallback(
+    (): Record<string, string> => ({ "content-type": "application/json", "x-cron-secret": secret }),
+    [secret]
+  );
 
   const load = useCallback(async () => {
     const [a, m, s] = await Promise.all([
@@ -44,9 +52,16 @@ export function AdminDashboard() {
     // เปิดฟอร์มแก้ไขอัตโนมัติถ้ามาจากปุ่ม "แก้ไข" ในการ์ด LINE (?edit=<id>)
     const p = new URLSearchParams(window.location.search);
     setEditId(p.get("edit"));
+    setSecret(localStorage.getItem("cc_write_secret") || "");
   }, [load]);
 
-  const scheduledCount = articles.filter((a) => a.status === "scheduled").length;
+  function rememberSecret(v: string) {
+    setSecret(v);
+    localStorage.setItem("cc_write_secret", v);
+  }
+
+  // คลัง = บทความที่ยังไม่ได้โพสต์ (pending รอการ์ด + scheduled ส่งการ์ดแล้วรออนุมัติ)
+  const bufferCount = articles.filter((a) => a.status === "pending" || a.status === "scheduled").length;
 
   async function generate() {
     if (!topic.trim()) return;
@@ -64,25 +79,42 @@ export function AdminDashboard() {
     setBusy(false);
   }
 
-  async function approve(id: string, scheduledISO: string) {
-    await fetch(`/api/articles/${id}`, {
+  /** เปลี่ยน "เวลาที่การ์ดจะเข้ากลุ่ม" (ไม่ใช่อนุมัติ — อนุมัติกดในกลุ่ม LINE) */
+  async function setCardTime(id: string, scheduledISO: string) {
+    const res = await fetch(`/api/articles/${id}`, {
       method: "PATCH",
-      headers: { "content-type": "application/json" },
+      headers: writeHeaders(),
       body: JSON.stringify({ scheduled_at: scheduledISO }),
     });
+    if (!res.ok) setNote(res.status === 401 ? "ต้องใส่รหัสเขียน (CRON_SECRET) ก่อน" : "เปลี่ยนเวลาไม่สำเร็จ");
     await load();
   }
   async function save(id: string, patch: Partial<Article>) {
-    await fetch(`/api/articles/${id}`, {
+    const res = await fetch(`/api/articles/${id}`, {
       method: "PATCH",
-      headers: { "content-type": "application/json" },
+      headers: writeHeaders(),
       body: JSON.stringify(patch),
     });
+    if (!res.ok) setNote(res.status === 401 ? "ต้องใส่รหัสเขียน (CRON_SECRET) ก่อน" : "บันทึกไม่สำเร็จ");
     await load();
   }
   async function del(id: string) {
-    await fetch(`/api/articles/${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/articles/${id}`, { method: "DELETE", headers: writeHeaders() });
+    if (!res.ok) setNote(res.status === 401 ? "ต้องใส่รหัสเขียน (CRON_SECRET) ก่อน" : "ลบไม่สำเร็จ");
     await load();
+  }
+  /** หารูปฟรีใหม่จาก Pexels/Unsplash ให้การ์ดนี้ (ยังไม่บันทึก — ให้กดบันทึกเอง) */
+  async function findImage(query: string, topic: string): Promise<string | null> {
+    const res = await fetch(
+      `/api/image-search?${new URLSearchParams({ q: query, topic, seed: Math.random().toString(36).slice(2, 8) })}`,
+      { headers: { "x-cron-secret": secret } }
+    );
+    if (!res.ok) {
+      setNote(res.status === 401 ? "ต้องใส่รหัสเขียน (CRON_SECRET) ก่อน" : "หารูปไม่สำเร็จ");
+      return null;
+    }
+    const d = await res.json();
+    return d.url || null;
   }
 
   async function runStock() {
@@ -134,6 +166,19 @@ export function AdminDashboard() {
               ? "🟢 การปล่อยจริงเปิดอยู่ — บทความที่ถึงเวลาจะโพสต์ลงเว็บ + เพจ SiamAthlete จริง"
               : "🔴 การปล่อยจริงปิดอยู่ (PUBLISH_ENABLED=false) — ยังไม่โพสต์ลงเพจจริง (รอเจ้าของเปิดสวิตช์)"}
           </p>
+          <label className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-gray-500">รหัสเขียน (CRON_SECRET):</span>
+            <input
+              type="password"
+              value={secret}
+              onChange={(e) => rememberSecret(e.target.value)}
+              placeholder="วางรหัสครั้งเดียว จำไว้ในเครื่องนี้"
+              className="w-64 rounded border px-2 py-1"
+            />
+            <span className="text-xs text-gray-400">
+              ต้องมีรหัสจึงจะแก้บทความ/เปลี่ยนรูป/ลบได้ (กันคนนอกยิงแก้คิว)
+            </span>
+          </label>
           {[status.supabase, status.line, status.facebook].some((x) => !x) && (
             <p className="mt-1 text-amber-600">
               ⚠️ ยังมีบริการที่เป็น mock — เติม key ใน .env (ดู README)
@@ -145,7 +190,7 @@ export function AdminDashboard() {
       {/* แถวบน: เกจ + สร้างบทความ */}
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="space-y-4">
-          <StockGauge count={scheduledCount} target={settings.stock_target} threshold={settings.stock_threshold} />
+          <StockGauge count={bufferCount} target={settings.stock_target} threshold={settings.stock_threshold} />
           <div className="rounded-lg border bg-white p-4 flex flex-wrap items-end gap-3 text-sm">
             <label className="block">
               <span className="text-gray-500">เป้าสต็อก</span>
@@ -207,9 +252,10 @@ export function AdminDashboard() {
               <ArticleCard
                 key={a.id}
                 article={a}
-                onApprove={approve}
+                onSetCardTime={setCardTime}
                 onSave={save}
                 onDelete={del}
+                onFindImage={findImage}
                 defaultEditing={a.id === editId}
               />
             ))

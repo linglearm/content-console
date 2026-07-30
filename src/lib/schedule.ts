@@ -13,18 +13,69 @@ export interface Slot {
   scheduled_at: string; // UTC ISO — ใช้เป็นค่า scheduled_at ของบทความ
   bkk_date: string; // YYYY-MM-DD (เวลาไทย)
   bkk_time: string; // HH:MM (เวลาไทย)
-  pillar: string; // เสาหลัก A/B/C/D/E/F ที่แนะนำสำหรับ slot นี้
+  pillar: string; // รหัสเสาหลักของช่วงเวลานี้ (A/B/C/D)
+  pillarName: string; // ชื่อเสาหลักภาษาไทย
+  topicHints: string; // คลังหัวข้อของเสาหลักนั้น (ให้ routine เลือกไปเขียน)
 }
 
 export interface BufferPlan {
   postsPerDay: number;
-  targetDays: number;
-  minDays: number;
-  scheduledFuture: number; // จำนวนบทความที่ตั้งเวลาไว้ในอนาคต
-  daysCovered: number; // คิวครอบคลุมกี่วัน
-  needRefill: boolean; // ต่ำกว่า minDays → ควรเติม
-  openSlots: Slot[]; // ช่องว่างที่ควรเติม (เรียงจากใกล้สุด) ถึงเป้า targetDays
+  targetItems: number; // เป้าจำนวนบทความในคลัง
+  minItems: number; // ต่ำกว่านี้ = ต้องเติม
+  inBuffer: number; // จำนวนบทความในคลัง (pending) + ที่ส่งการ์ดแล้วรออนุมัติ (scheduled)
+  daysCovered: number; // คลังพอใช้กี่วัน
+  needRefill: boolean;
+  openSlots: Slot[]; // ช่องเวลาว่างที่ควรเติม (เรียงจากใกล้สุด) ให้ครบเป้า
 }
+
+/**
+ * คลังหัวข้อแยกตามเวลาการ์ด (บรีฟของเจ้าของเพจ SiamAthlete)
+ * key = เวลาไทย HH:MM ใน POST_TIMES · ถ้าเพิ่มเวลาใหม่ใน env ต้องมาเพิ่มที่นี่ด้วย
+ */
+export const SLOT_PILLARS: Record<string, { code: string; name: string; hints: string }> = {
+  "11:00": {
+    code: "A",
+    name: "การฝึก (เบื้องต้น → advance)",
+    hints:
+      "mechanical tension vs metabolic stress vs muscle damage / progressive overload ที่มากกว่าแค่เพิ่มน้ำหนัก / " +
+      "volume landmarks MEV-MAV-MRV / เล่นถึง failure จำเป็นไหม / ช่วง rep เรื่องจริงเรื่องหลอก / frequency เล่นกล้ามเดิมกี่วันครั้ง / " +
+      "rest period สั้นหรือยาว / eccentric & tempo / mind-muscle connection มีผลจริงไหม / full ROM vs partial / periodization / " +
+      "exercise selection ตาม biomechanics และ resistance profile / deload / compound vs isolation",
+  },
+  "14:00": {
+    code: "B",
+    name: "โภชนาการ / ลดไขมัน",
+    hints:
+      "โปรตีนต่อวันเท่าไหร่จริงๆ + leucine threshold / anabolic window มีจริงไหม / energy balance คือของจริง / คาร์บกับไกลโคเจน / " +
+      "ตัดไขมันต่ำไปพังฮอร์โมน / bulk-cut vs recomp / metabolic adaptation ทำไมยิ่งลดยิ่งยาก / NEAT ตัวแปรลับ / LISS vs HIIT / " +
+      "fasted cardio เผาไขมันกว่าจริงไหม / refeed & diet break / creatine ได้อะไรบ้าง / supplement ไหนมีหลักฐานไหนทิ้งเงิน / " +
+      "fiber & gut health / mitochondrial biogenesis / set point-leptin-ghrelin ร่างกายต้านการลด",
+  },
+  "16:00": {
+    code: "C",
+    name: "ฮอร์โมน & สรีรวิทยา + หัวข้อเชิงลึกที่คนไม่ค่อยพูด",
+    hints:
+      "testosterone สร้างยังไง ทำงานผ่าน androgen receptor / GH & IGF-1 / insulin ฮอร์โมน anabolic ที่คนเข้าใจผิด / " +
+      "cortisol เครียดนอนน้อยพังกล้าม / mTOR & muscle protein synthesis / myostatin เบรกธรรมชาติ / androgen receptor density แต่ละมัด / " +
+      "satellite cells & muscle memory / estrogen ในผู้ชายไม่ได้แย่อย่างที่คิด / thyroid & metabolic rate / นอนคือ anabolic / " +
+      "สมดุล MPS vs MPB — เชิงลึก: enhanced vs natural ความต่างที่วงการไม่พูดตรงๆ / body dysmorphia-bigorexia / " +
+      "genetics เพดานกล้าม insertion-fiber type-myonuclei / ผู้หญิงสร้างกล้ามทำไมไม่บึกเท่าผู้ชาย / sarcopenia / overtraining syndrome / " +
+      "การตรวจเลือดที่คนจริงจังควรทำ / recovery กล้ามโตตอนพัก / injury prevention & prehab / PED harm ความเสี่ยงจริงที่การตลาดไม่บอก",
+  },
+  "20:00": {
+    code: "D",
+    name: "เตรียมแข่งเพาะกาย + ประวัติ AAS เพื่อการศึกษา",
+    hints:
+      "peak week ภาพรวม+ความเสี่ยง / water & sodium manipulation หลักการและอันตราย / carb depletion-loading / " +
+      "รุ่นแข่งต่างกันยังไง Physique-Classic-Bodybuilding-Bikini / posing ตัดสินแพ้ชนะ / tanning & stage presentation / เกณฑ์ตัดสิน / " +
+      "reverse dieting กันโยโย่ / timeline เริ่มคัตกี่สัปดาห์ / สภาพจิตใจช่วง prep — ประวัติ AAS: การสังเคราะห์ testosterone ปี 1935 " +
+      "(Butenandt, Ruzicka, Nobel) / กำเนิด Dianabol กับ Dr.John Ziegler ยุคสงครามเย็น / ทำไมต้องมี ester / nandrolone ที่มาและการใช้ทางการแพทย์ / " +
+      "ประวัติการโด๊ปในกีฬา+เคสดังที่เปลี่ยนวงการ / กำเนิด WADA / SARMs คืออะไร สถานะงานวิจัย / ผลข้างเคียงที่บันทึกในงานวิจัย " +
+      "หัวใจ-ตับ-ฮอร์โมน-จิตใจ / ประวัติกฎหมายควบคุม / ตำนานยุคทองเพาะกาย",
+  },
+};
+
+const FALLBACK_PILLAR = { code: "A", name: "การฝึก", hints: SLOT_PILLARS["11:00"].hints };
 
 /** แตกวันที่แบบเวลาไทยจาก Date */
 function bkkYMD(d: Date): { y: number; m: number; day: number } {
@@ -38,12 +89,9 @@ function slotUtc(base: { y: number; m: number; day: number }, dayOffset: number,
   return new Date(wallMs - TZ_OFFSET_MIN * 60000); // แปลงกลับเป็น UTC จริง
 }
 
-/** map เวลาไทย (ชั่วโมง) + เลขวันคู่/คี่ → เสาหลัก (ตามบรีฟ SiamAthlete) */
-export function pillarFor(bkkDay: number, hh: number): string {
-  if (hh < 13) return "A"; // ~เช้า/สาย: การฝึก
-  if (hh < 18) return "B"; // ~บ่าย: โภชนาการ/ลดไขมัน
-  if (hh < 20) return bkkDay % 2 === 0 ? "C" : "D"; // ~หัวค่ำ: ฮอร์โมน (คู่) / เตรียมแข่ง (คี่)
-  return bkkDay % 2 === 0 ? "E" : "F"; // ~ดึก: ประวัติ AAS (คู่) / เชิงลึก (คี่)
+/** เสาหลักของช่องเวลา — ยึดตาราง SLOT_PILLARS (เวลาไทย HH:MM) */
+export function pillarFor(bkkTime: string): { code: string; name: string; hints: string } {
+  return SLOT_PILLARS[bkkTime] || FALLBACK_PILLAR;
 }
 
 /** เลขนาทีของ epoch (ใช้จับคู่ slot กับ scheduled_at โดยไม่สนรูปแบบ string) */
@@ -64,11 +112,15 @@ export function buildSlots(now: Date, nDays: number, times: string[]): Slot[] {
       const utc = slotUtc(base, d, hh, mm);
       if (utc.getTime() <= now.getTime()) continue; // ผ่านไปแล้ว ข้าม
       const bp = bkkYMD(utc);
+      const bkk_time = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+      const p = pillarFor(bkk_time);
       out.push({
         scheduled_at: utc.toISOString(),
         bkk_date: `${bp.y}-${String(bp.m + 1).padStart(2, "0")}-${String(bp.day).padStart(2, "0")}`,
-        bkk_time: `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`,
-        pillar: pillarFor(bp.day, hh),
+        bkk_time,
+        pillar: p.code,
+        pillarName: p.name,
+        topicHints: p.hints,
       });
     }
   }
@@ -87,27 +139,33 @@ function takenMinutes(scheduled: Article[], now: Date): Set<number> {
   return s;
 }
 
-/** สถานะ buffer + ช่องว่างที่ควรเติม */
+/**
+ * สถานะคลัง buffer + ช่องเวลาว่างที่ควรเติม
+ * queued = บทความที่ยังไม่ได้โพสต์ (pending ในคลัง + scheduled ที่ส่งการ์ดแล้วรออนุมัติ)
+ * เป้าเป็น "จำนวนชิ้น" ไม่ใช่จำนวนวัน — openSlots คืนเท่าที่ยังขาดจากเป้า
+ */
 export function computePlan(
-  scheduled: Article[],
+  queued: Article[],
   now: Date,
   times: string[],
-  targetDays: number,
-  minDays: number
+  targetItems: number,
+  minItems: number
 ): BufferPlan {
   const postsPerDay = Math.max(1, times.length);
-  const slots = buildSlots(now, targetDays, times);
-  const taken = takenMinutes(scheduled, now);
-  const openSlots = slots.filter((s) => !taken.has(epochMin(s.scheduled_at)));
-  const scheduledFuture = taken.size;
-  const daysCovered = scheduledFuture / postsPerDay;
+  const inBuffer = queued.length;
+  const needed = Math.max(0, targetItems - inBuffer);
+  // มองไปข้างหน้าให้พอกับที่ขาด (+1 วันกันเศษ) แล้วคัดช่องที่ยังไม่มีใครจอง
+  const horizonDays = Math.ceil(needed / postsPerDay) + 1;
+  const slots = buildSlots(now, horizonDays, times);
+  const taken = takenMinutes(queued, now);
+  const openSlots = slots.filter((s) => !taken.has(epochMin(s.scheduled_at))).slice(0, needed);
   return {
     postsPerDay,
-    targetDays,
-    minDays,
-    scheduledFuture,
-    daysCovered: Math.round(daysCovered * 10) / 10,
-    needRefill: daysCovered < minDays,
+    targetItems,
+    minItems,
+    inBuffer,
+    daysCovered: Math.round((inBuffer / postsPerDay) * 10) / 10,
+    needRefill: inBuffer < minItems,
     openSlots,
   };
 }

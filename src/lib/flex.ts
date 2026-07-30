@@ -36,13 +36,14 @@ export function buildDraftFlex(
         {
           type: "button",
           style: "primary",
-          color: GREEN,
+          color: FB_BLUE,
           height: "sm",
           action: {
-            type: "datetimepicker",
-            label: "✅ อนุมัติ + ตั้งเวลา",
+            // อนุมัติ = โพสต์ลงเพจทันที (ไม่ต้องเลือกเวลา — เวลาของการ์ดคือเวลาที่ตั้งไว้แล้ว)
+            type: "postback",
+            label: "✅ อนุมัติ + โพสต์ลงเพจ",
             data: `action=approve&id=${article.id}`,
-            mode: "datetime",
+            displayText: "✅ อนุมัติ + โพสต์ลงเพจ",
           },
         },
         {
@@ -56,7 +57,7 @@ export function buildDraftFlex(
               color: SLATE,
               height: "sm",
               flex: 1,
-              action: { type: "uri", label: "✏️ แก้ไข", uri: `${siteUrl}/admin?edit=${article.id}` },
+              action: { type: "uri", label: "🖼 เปลี่ยนรูป/แก้ไข", uri: `${siteUrl}/admin?edit=${article.id}` },
             },
             {
               type: "button",

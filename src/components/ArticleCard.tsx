@@ -27,37 +27,50 @@ function toLocalInput(iso: string | null): string {
 
 export function ArticleCard({
   article,
-  onApprove,
+  onSetCardTime,
   onSave,
   onDelete,
+  onFindImage,
   defaultEditing = false,
 }: {
   article: Article;
-  onApprove: (id: string, scheduledISO: string) => Promise<void>;
+  onSetCardTime: (id: string, scheduledISO: string) => Promise<void>;
   onSave: (id: string, patch: Partial<Article>) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onFindImage: (query: string, topic: string) => Promise<string | null>;
   defaultEditing?: boolean;
 }) {
   const [editing, setEditing] = useState(defaultEditing);
   const [title, setTitle] = useState(article.title);
   const [excerpt, setExcerpt] = useState(article.excerpt);
   const [body, setBody] = useState(article.body);
+  const [imageUrl, setImageUrl] = useState(article.image_url || "");
+  const [imageQuery, setImageQuery] = useState(""); // คำค้นอังกฤษ (ว่าง = ใช้หัวข้อบทความ)
   const [when, setWhen] = useState(toLocalInput(article.scheduled_at) || toLocalInput(new Date().toISOString()));
   const [busy, setBusy] = useState(false);
 
   const stageIdx = STAGES.indexOf(article.status);
+  const bodyLen = body.length; // ตัวอักษรรวมช่องว่าง — เกณฑ์เพจคือ 1500-2000
+  const lenOk = bodyLen >= 1500 && bodyLen <= 2000;
 
-  async function approve() {
+  async function saveCardTime() {
     if (!when) return;
     setBusy(true);
-    await onApprove(article.id, new Date(when).toISOString());
+    await onSetCardTime(article.id, new Date(when).toISOString());
     setBusy(false);
   }
   async function save() {
     setBusy(true);
-    await onSave(article.id, { title, excerpt, body });
+    await onSave(article.id, { title, excerpt, body, image_url: imageUrl });
     setBusy(false);
     setEditing(false);
+  }
+  /** หารูปฟรีใหม่ (ยังไม่บันทึกลงฐาน — ต้องกด "บันทึกการแก้ไข" เอง) */
+  async function newImage() {
+    setBusy(true);
+    const url = await onFindImage(imageQuery, article.topic);
+    if (url) setImageUrl(url);
+    setBusy(false);
   }
   async function del() {
     if (!confirm("ลบบทความนี้?")) return;
@@ -101,6 +114,7 @@ export function ArticleCard({
       <div className="border-t bg-gray-50 px-4 py-3 space-y-3">
         {article.status !== "published" && (
           <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-gray-500">เวลาที่การ์ดเข้ากลุ่ม:</span>
             <input
               type="datetime-local"
               value={when}
@@ -108,12 +122,15 @@ export function ArticleCard({
               className="rounded border px-2 py-1 text-sm"
             />
             <button
-              onClick={approve}
+              onClick={saveCardTime}
               disabled={busy}
               className="rounded bg-brand-500 px-3 py-1.5 text-sm text-white hover:bg-brand-600 disabled:opacity-50"
             >
-              {article.status === "pending" ? "อนุมัติ + ตั้งเวลา" : "เปลี่ยนเวลา"}
+              บันทึกเวลา
             </button>
+            <span className="text-xs text-gray-400">
+              {article.status === "scheduled" ? "ส่งการ์ดแล้ว — อนุมัติในกลุ่ม LINE" : "อนุมัติกดในกลุ่ม LINE"}
+            </span>
           </div>
         )}
         <div className="flex gap-2 text-sm">
@@ -145,6 +162,36 @@ export function ArticleCard({
               className="w-full rounded border px-2 py-1 text-sm"
               placeholder="คำโปรย"
             />
+            {/* เปลี่ยนรูปปกก่อนอนุมัติ — วาง URL เองก็ได้ หรือกดหารูปฟรีใหม่ */}
+            <div className="rounded border bg-white p-2 space-y-2">
+              <div className="flex items-center gap-2">
+                {imageUrl && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={imageUrl} alt="" className="w-24 h-16 object-cover rounded flex-shrink-0" />
+                )}
+                <input
+                  value={imageUrl}
+                  onChange={(e) => setImageUrl(e.target.value)}
+                  className="flex-1 rounded border px-2 py-1 text-xs"
+                  placeholder="URL รูปปก (https://…)"
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={imageQuery}
+                  onChange={(e) => setImageQuery(e.target.value)}
+                  className="flex-1 rounded border px-2 py-1 text-xs"
+                  placeholder='คำค้นรูปภาษาอังกฤษ เช่น "barbell squat gym"'
+                />
+                <button
+                  onClick={newImage}
+                  disabled={busy}
+                  className="rounded border px-3 py-1 text-xs hover:bg-gray-100 disabled:opacity-50"
+                >
+                  🔄 หารูปฟรีใหม่
+                </button>
+              </div>
+            </div>
             <textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
@@ -152,6 +199,9 @@ export function ArticleCard({
               className="w-full rounded border px-2 py-1 text-sm font-mono"
               placeholder="เนื้อหา (Markdown)"
             />
+            <p className={`text-xs ${lenOk ? "text-gray-400" : "text-red-600"}`}>
+              ความยาว {bodyLen.toLocaleString()} ตัวอักษร (นับช่องว่าง) — เกณฑ์เพจ 1,500–2,000
+            </p>
             <button
               onClick={save}
               disabled={busy}

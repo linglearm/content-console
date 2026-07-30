@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyLineSignature, replyMessage } from "@/lib/line";
 import { hasReal } from "@/lib/env";
-import { addLineMessage, getArticle, updateArticle } from "@/lib/store";
+import { addLineMessage, getArticle } from "@/lib/store";
+import { approveArticle, rejectArticle } from "@/lib/content";
 
 export const dynamic = "force-dynamic";
 
@@ -50,22 +51,17 @@ export async function POST(req: NextRequest) {
       }
 
       if (action === "approve") {
-        // datetimepicker ส่งเวลาที่เลือกมาใน params.datetime ("YYYY-MM-DDTHH:mm" = เวลาไทย)
-        const dt = ev.postback?.params?.datetime;
-        const when = dt ? new Date(`${dt}:00+07:00`) : null;
-        if (when && !isNaN(when.getTime())) {
-          await updateArticle(id, { status: "scheduled", scheduled_at: when.toISOString() });
-          const reply =
-            `✅ อนุมัติแล้ว: ${article.title}\n` +
-            `จะปล่อย: ${when.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })} น.`;
-          if (ev.replyToken) await replyMessage(ev.replyToken, reply);
-          await addLineMessage("publish_confirm", reply, id);
-        }
+        // อนุมัติ = โพสต์ลงเพจทันที (เวลาของการ์ดคือเวลาที่ระบบตั้งไว้แล้ว)
+        const r = await approveArticle(id);
+        const reply = r.ok
+          ? `✅ โพสต์ลงเพจแล้ว: ${article.title}\n${r.postUrl || ""}\nเว็บ: ${r.link || ""}`.trim()
+          : `⚠️ ยังโพสต์ไม่ได้: ${article.title}\n${r.error}`;
+        if (ev.replyToken) await replyMessage(ev.replyToken, reply);
       } else if (action === "reject") {
-        await updateArticle(id, { status: "rejected" });
-        const reply =
-          `🚫 ไม่อนุมัติแล้ว: ${article.title}\n` +
-          `(ระบบจะสร้างบทความใหม่มาแทนในรอบถัดไป)`;
+        const r = await rejectArticle(id);
+        const reply = r.ok
+          ? `🚫 ไม่อนุมัติแล้ว: ${article.title}\n(บทความชิ้นถัดไปในคลังจะมาตามเวลาการ์ดรอบต่อไป)`
+          : `⚠️ ไม่สำเร็จ: ${r.error}`;
         if (ev.replyToken) await replyMessage(ev.replyToken, reply);
         await addLineMessage("draft", reply, id);
       }
@@ -84,17 +80,17 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      // "อนุมัติ <id> <ISO>" (สำรอง สำหรับพิมพ์เอง)
-      const approve = text.match(/^(?:อนุมัติ|approve)\s+(\S+)\s+(.+)$/i);
+      // "อนุมัติ <id>" (สำรอง สำหรับพิมพ์เอง — เผื่อปุ่มบนการ์ดกดไม่ได้)
+      const approve = text.match(/^(?:อนุมัติ|approve)\s+(\S+)\s*$/i);
       if (approve) {
-        const [, id, whenRaw] = approve;
-        const when = new Date(whenRaw);
+        const [, id] = approve;
         const article = await getArticle(id);
-        if (article && !isNaN(when.getTime())) {
-          await updateArticle(id, { status: "scheduled", scheduled_at: when.toISOString() });
-          const reply = `✅ อนุมัติ+ตั้งเวลาแล้ว: ${article.title}\nจะปล่อย: ${when.toISOString()}`;
+        if (article) {
+          const r = await approveArticle(id);
+          const reply = r.ok
+            ? `✅ โพสต์ลงเพจแล้ว: ${article.title}\n${r.postUrl || ""}`.trim()
+            : `⚠️ ยังโพสต์ไม่ได้: ${r.error}`;
           if (ev.replyToken) await replyMessage(ev.replyToken, reply);
-          await addLineMessage("publish_confirm", reply, id);
         }
         continue;
       }

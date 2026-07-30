@@ -126,6 +126,58 @@ export async function claimForPublish(id: string, nowISO: string): Promise<Artic
   return a;
 }
 
+/**
+ * Atomic claim ตอน "ปล่อยการ์ดเข้ากลุ่ม" — พลิก pending → scheduled เฉพาะแถวที่ยัง pending
+ * กันการ์ดซ้ำเมื่อ cron รอบใหม่ทับรอบเก่า (คนแรกได้ Article คนหลังได้ null แล้วต้องข้าม)
+ */
+export async function claimForRelease(id: string): Promise<Article | null> {
+  if (supabaseReady()) {
+    const { data, error } = await supabaseService()
+      .from(T.articles)
+      .update({ status: "scheduled" })
+      .eq("id", id)
+      .eq("status", "pending")
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    return (data as Article) || null;
+  }
+  const a = db().articles.find((x) => x.id === id);
+  if (!a || a.status !== "pending") return null;
+  a.status = "scheduled";
+  return a;
+}
+
+/** บทความในคลังที่ถึงเวลาส่งการ์ดแล้ว (pending + scheduled_at <= now) เรียงเก่าสุดก่อน */
+export async function listPendingDue(nowISO: string): Promise<Article[]> {
+  const rows = await listArticles({ status: "pending" });
+  return rows
+    .filter((a) => a.scheduled_at && a.scheduled_at <= nowISO)
+    .sort((a, b) => (a.scheduled_at || "").localeCompare(b.scheduled_at || ""));
+}
+
+/** ทุกบทความที่ยังไม่ได้โพสต์ = คลัง (pending) + ที่ส่งการ์ดแล้วรออนุมัติ (scheduled) */
+export async function listQueued(): Promise<Article[]> {
+  const [pending, awaiting] = await Promise.all([
+    listArticles({ status: "pending" }),
+    listArticles({ status: "scheduled" }),
+  ]);
+  return [...pending, ...awaiting];
+}
+
+export async function countPending(): Promise<number> {
+  const rows = await listArticles({ status: "pending" });
+  return rows.length;
+}
+
+/** หัวข้อ+ชื่อเรื่องที่เคยเขียนไปแล้วทุกสถานะ — ให้ routine เช็กกันเขียนซ้ำ */
+export async function listAllTopics(): Promise<{ topic: string; title: string; status: string; created_at: string }[]> {
+  const rows = await listArticles();
+  return rows
+    .map((a) => ({ topic: a.topic, title: a.title, status: a.status, created_at: a.created_at }))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
 export async function deleteArticle(id: string): Promise<void> {
   if (supabaseReady()) {
     const { error } = await supabaseService().from(T.articles).delete().eq("id", id);
