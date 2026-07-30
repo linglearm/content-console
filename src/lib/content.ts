@@ -263,11 +263,21 @@ export async function releaseDue(nowISO?: string): Promise<{ released: Article[]
     if (!claimed) continue;
 
     const flex = buildDraftFlex(claimed, siteUrl());
-    const sentLive = await pushFlexToGroup(flex.altText, flex.contents);
+    let sentLive = false;
+    let pushError = "";
+    try {
+      sentLive = await pushFlexToGroup(flex.altText, flex.contents);
+    } catch (e) {
+      pushError = (e as Error).message; // เช่น 429 โควตาข้อความ LINE หมดเดือนนี้
+    }
     if (!sentLive && lineReady()) {
-      // LINE ของจริงแต่ยิงไม่ออก (token/เน็ต) → คืนเข้าคลัง รอบหน้าเอาใหม่
+      // LINE ของจริงแต่ยิงไม่ออก (โควตาหมด/token/เน็ต) → คืนเข้าคลัง ให้ cron รอบหน้าลองใหม่
+      // ต้องไม่ throw ออกไป ไม่งั้นบทความค้างสถานะ scheduled ทั้งที่การ์ดไม่เคยถึงกลุ่ม
       await updateArticle(a.id, { status: "pending" });
       failed++;
+      if (pushError) {
+        await addLineMessage("draft", `[push ล้ม] ${claimed.title} — ${pushError}`, claimed.id);
+      }
       continue;
     }
     await addLineMessage("draft", (sentLive ? "" : "[mock] ") + `📝 การ์ดรออนุมัติ: ${claimed.title}`, claimed.id);
