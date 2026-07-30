@@ -15,7 +15,6 @@ import {
   claudeReady,
   contentTheme,
   geminiReady,
-  lineOaUrl,
   lineReady,
   postTimes,
   publishEnabled,
@@ -322,17 +321,11 @@ export async function approveArticle(id: string): Promise<{
   }
 
   // คอมเมนต์ใต้โพสต์ (best-effort — ล้มแล้วไม่กระทบการโพสต์)
-  if (fb.posted) {
-    if (a.refs) await commentOnPost(fb.postId, a.refs);
-    const oa = lineOaUrl();
-    if (oa) {
-      await commentOnPost(
-        fb.postId,
-        `สนใจ PED AAS เสื้อผ้ากีฬา หรืออาหารเสริม แอดไลน์มาคุยกันได้เลย 👉 ${oa}`
-      );
-    }
+  // คอมเมนต์ชวนแอด LINE OA ถูกถอดออกตามคำสั่งเจ้าของ 2026-07-31
+  // (คำสั่งของงานนี้คือ "โพสต์ลงเพจเฟซบุ๊ก" อย่างเดียว ไม่มีการโปรโมต LINE OA)
+  if (fb.posted && a.refs) {
+    await commentOnPost(fb.postId, a.refs);
   }
-
   const updated = await updateArticle(id, { fb_post_id: fb.postId });
   const postUrl = fbPostUrl(fb.postId);
   await addLineMessage(
