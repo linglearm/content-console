@@ -83,9 +83,18 @@ export function postTimes(): string[] {
     .filter(Boolean);
 }
 
-/** คลัง buffer: เก็บบทความรอไว้กี่ชิ้น (เป้า) */
+/**
+ * คลัง buffer: เก็บบทความรอไว้กี่ชิ้น (เป้า)
+ * ดีฟอลต์ 12 = 3 วันพอดีที่ 4 โพสต์/วัน — ต้องไม่ต่ำกว่าเกณฑ์เตือน (bufferAlertDays)
+ * ไม่งั้นคลังเต็มแล้วก็ยังโดนเตือนว่า "เหลือน้อยกว่า 3 วัน" ทุกวัน
+ */
 export function bufferTargetItems(): number {
-  return Math.max(1, Number(process.env.BUFFER_TARGET_ITEMS || 10));
+  return Math.max(1, Number(process.env.BUFFER_TARGET_ITEMS || 12));
+}
+
+/** เตือนเจ้าของเมื่อคลังเหลือน้อยกว่ากี่วัน (เจ้าของจะได้เปิดคอมให้ routine เขียนเติม) */
+export function bufferAlertDays(): number {
+  return Math.max(1, Number(process.env.BUFFER_ALERT_DAYS || 3));
 }
 
 /** คลัง buffer: เหลือน้อยกว่ากี่ชิ้นจึงเติมใหม่ */

@@ -10,6 +10,7 @@
  */
 import {
   bodyLenRange,
+  bufferAlertDays,
   bufferMinItems,
   bufferTargetItems,
   claudeReady,
@@ -36,7 +37,6 @@ import {
   countPending,
   createArticle,
   getArticle,
-  getSettings,
   listAllTopics,
   listPendingDue,
   listQueued,
@@ -345,26 +345,36 @@ export async function rejectArticle(id: string): Promise<{ ok: boolean; error?: 
   return { ok: true, article: updated || a };
 }
 
-/** เช็กคลังบทความ — ต่ำกว่าเกณฑ์แจ้งเตือน LINE */
+/**
+ * เช็กคลังบทความ — คิดเป็น "จำนวนวันที่ยังปล่อยได้" ไม่ใช่จำนวนชิ้น
+ * เหลือน้อยกว่า BUFFER_ALERT_DAYS (ดีฟอลต์ 3 วัน) → เตือนเข้ากลุ่ม LINE
+ * เพื่อให้เจ้าของรู้ว่าต้องเปิดคอมให้ routine เขียนเติม (routine รันได้เฉพาะตอนแอปเปิด)
+ */
 export async function stockCheck(): Promise<{
   count: number;
+  perDay: number;
+  daysLeft: number;
   target: number;
-  threshold: number;
+  alertDays: number;
   alerted: boolean;
 }> {
-  const settings = await getSettings();
   const count = await countPending();
+  const perDay = Math.max(1, postTimes().length);
+  const daysLeft = Math.round((count / perDay) * 10) / 10;
+  const alertDays = bufferAlertDays();
+  const target = bufferTargetItems();
   let alerted = false;
 
-  if (count < settings.stock_threshold) {
+  if (daysLeft < alertDays) {
     const text =
-      `⚠️ คลังบทความใกล้หมด!\n` +
-      `เหลือในคลัง (pending): ${count} ชิ้น (เป้า ${settings.stock_target}, เกณฑ์เตือน < ${settings.stock_threshold})\n` +
-      `ให้ routine เขียนเติม หรือดูที่: ${siteUrl()}/admin`;
+      `⚠️ คลังบทความ SiamAthlete เหลือน้อย\n` +
+      `เหลือ ${count} ชิ้น = พอปล่อยอีก ${daysLeft} วัน (เกณฑ์เตือน < ${alertDays} วัน · เป้า ${target} ชิ้น)\n` +
+      `เปิดคอมทิ้งไว้ให้ routine "siamathlete-article-buffer" เขียนเติมด้วยนะคะ\n` +
+      `ดูคลังได้ที่ ${siteUrl()}/admin`;
     const sentLive = await pushToGroup(text);
     await addLineMessage("stock_alert", (sentLive ? "" : "[mock] ") + text);
     alerted = true;
   }
 
-  return { count, target: settings.stock_target, threshold: settings.stock_threshold, alerted };
+  return { count, perDay, daysLeft, target, alertDays, alerted };
 }
