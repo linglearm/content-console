@@ -371,8 +371,14 @@ export async function stockCheck(): Promise<{
       `เหลือ ${count} ชิ้น = พอปล่อยอีก ${daysLeft} วัน (เกณฑ์เตือน < ${alertDays} วัน · เป้า ${target} ชิ้น)\n` +
       `เปิดคอมทิ้งไว้ให้ routine "siamathlete-article-buffer" เขียนเติมด้วยนะคะ\n` +
       `ดูคลังได้ที่ ${siteUrl()}/admin`;
-    const sentLive = await pushToGroup(text);
-    await addLineMessage("stock_alert", (sentLive ? "" : "[mock] ") + text);
+    // ยิงไม่ออก (โควตา LINE เต็ม/เน็ตล่ม) ต้องไม่ทำให้ cron พัง — เก็บข้อความไว้ในแผงหลังบ้านเสมอ
+    let sentLive = false;
+    try {
+      sentLive = await pushToGroup(text);
+    } catch (e) {
+      console.error("[stockCheck] push ล้ม", e);
+    }
+    await addLineMessage("stock_alert", (sentLive ? "" : "[ส่งไม่ออก] ") + text);
     alerted = true;
   }
 
