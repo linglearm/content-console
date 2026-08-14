@@ -9,7 +9,7 @@ export type HofCommentResult = {
 };
 
 export type HofFacebookBridgeDeps = {
-  verifyPagePost(postId: string, submittedUrl: string): Promise<FbPagePostResult>;
+  verifyPagePost(postId: string | null | undefined, submittedUrl: string): Promise<FbPagePostResult>;
   findExactPostComment(postId: string, message: string): Promise<string | null>;
   commentOnPostDetailed(
     postId: string,
@@ -24,7 +24,7 @@ export type HofFacebookBridgeDeps = {
  * without a Facebook or Production call.
  */
 export async function deliverHofFacebookComments(
-  input: { postId: string; postUrl: string; sections: HofSection[] },
+  input: { postId?: string | null; postUrl: string; sections: HofSection[] },
   deps: HofFacebookBridgeDeps,
 ): Promise<{
   ok: boolean;

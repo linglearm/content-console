@@ -27,8 +27,12 @@ function graphVersion(): string {
 }
 
 function facebookHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^www\./, "").replace(/^m\./, "").replace(/^web\./, "");
-  return host === "facebook.com";
+  return ["facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com"]
+    .includes(hostname.toLowerCase());
+}
+
+function graphHost(hostname: string): boolean {
+  return hostname.toLowerCase() === "graph.facebook.com";
 }
 
 export function normalizePagePostId(rawPostId: string, pageId: string): string | null {
@@ -45,7 +49,7 @@ export function facebookStoryIdFromUrl(rawUrl: string): string | null {
     if (url.protocol !== "https:" || !facebookHost(url.hostname)) return null;
     const queryId = url.searchParams.get("story_fbid") || url.searchParams.get("fbid");
     if (queryId && /^(?:\d+|pfbid[\w-]+)$/i.test(queryId)) return queryId;
-    const match = url.pathname.match(/\/(?:posts|videos)\/((?:\d+|pfbid[\w-]+))(?:\/|$)/i);
+    const match = url.pathname.match(/\/(?:posts|videos|reel|reels)\/((?:\d+|pfbid[\w-]+))(?:\/|$)/i);
     return match?.[1] || null;
   } catch {
     return null;
@@ -61,50 +65,243 @@ export function isFacebookUrl(rawUrl: string): boolean {
   }
 }
 
+function comparableFacebookUrl(rawUrl: string): string | null {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "https:" || !facebookHost(url.hostname)) return null;
+    const storyId = facebookStoryIdFromUrl(url.toString());
+    if (storyId) return `story:${storyId}`;
+    const path = url.pathname.replace(/\/{2,}/g, "/").replace(/\/$/, "") || "/";
+    return `path:${path}`;
+  } catch {
+    return null;
+  }
+}
+
+function sameFacebookPost(
+  submittedUrls: string[],
+  permalinkUrl: string,
+  graphStoryId: string,
+): boolean {
+  const canonical = comparableFacebookUrl(permalinkUrl);
+  const canonicalStoryId = facebookStoryIdFromUrl(permalinkUrl);
+  return submittedUrls.some((rawUrl) => {
+    const submitted = comparableFacebookUrl(rawUrl);
+    const submittedStoryId = facebookStoryIdFromUrl(rawUrl);
+    if (submitted && canonical && submitted === canonical) return true;
+    if (!submittedStoryId) return false;
+    return submittedStoryId === canonicalStoryId || submittedStoryId === graphStoryId;
+  });
+}
+
+function decodeFacebookHtmlUrl(value: string): string {
+  return value
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&#x0*2f;/gi, "/")
+    .replace(/\\u0025/gi, "%")
+    .replace(/\\\//g, "/");
+}
+
+function canonicalFacebookUrlsFromHtml(html: string): string[] {
+  const candidates: string[] = [];
+  for (const tag of html.match(/<(?:link|meta)\b[^>]*>/gi) || []) {
+    const attrs = new Map<string, string>();
+    for (const match of tag.matchAll(/([:\w-]+)\s*=\s*(["'])([\s\S]*?)\2/gi)) {
+      attrs.set(match[1].toLowerCase(), decodeFacebookHtmlUrl(match[3]));
+    }
+    const relation = (attrs.get("rel") || attrs.get("property") || attrs.get("name") || "").toLowerCase();
+    const value = attrs.get("href") || attrs.get("content") || "";
+    if ((relation === "canonical" || relation === "og:url") && isFacebookUrl(value)) {
+      candidates.push(value);
+    }
+  }
+  return candidates;
+}
+
+/** Resolve a mobile /share/... link without ever following it off Facebook. */
+async function resolveFacebookWebUrl(rawUrl: string): Promise<string | null> {
+  let current: URL;
+  try {
+    current = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (current.protocol !== "https:" || !facebookHost(current.hostname)) return null;
+
+  for (let hop = 0; hop < 4; hop += 1) {
+    if (facebookStoryIdFromUrl(current.toString())) return current.toString();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const res = await fetch(current, {
+        method: "GET",
+        redirect: "manual",
+        cache: "no-store",
+        headers: {
+          accept: "text/html,application/xhtml+xml",
+          "user-agent": "Mozilla/5.0 (compatible; JongrakHealthBot/1.0)",
+        },
+        signal: controller.signal,
+      });
+      const responseUrl = isFacebookUrl(res.url) ? res.url : current.toString();
+      if (facebookStoryIdFromUrl(responseUrl)) return responseUrl;
+
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) return null;
+        const next = new URL(location, current);
+        if (next.protocol !== "https:" || !facebookHost(next.hostname)) return null;
+        current = next;
+        continue;
+      }
+
+      const contentType = res.headers.get("content-type") || "";
+      const contentLength = Number(res.headers.get("content-length") || "0");
+      if (!contentType.toLowerCase().includes("text/html") || contentLength > 1_000_000) {
+        return responseUrl;
+      }
+      const html = await res.text();
+      for (const candidate of canonicalFacebookUrlsFromHtml(html.slice(0, 1_000_000))) {
+        if (facebookStoryIdFromUrl(candidate)) return candidate;
+      }
+      return responseUrl;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return null;
+}
+
+type GraphPagePost = { id: string; permalinkUrl: string; pageId: string };
+
+function validatedGraphPagePost(data: any, configuredPageId: string): GraphPagePost | null {
+  const id = normalizePagePostId(String(data?.id || ""), configuredPageId);
+  const permalinkUrl = String(data?.permalink_url || "");
+  const pageId = String(data?.from?.id || "");
+  if (!id || pageId !== configuredPageId || !isFacebookUrl(permalinkUrl)) return null;
+  return { id, permalinkUrl, pageId };
+}
+
+async function graphJson(url: URL, token: string): Promise<{ ok: boolean; status: number; data: any }> {
+  url.searchParams.delete("access_token");
+  const res = await fetch(url, {
+    headers: { authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  return { ok: res.ok, status: res.status, data: await res.json().catch(() => ({})) };
+}
+
+async function lookupPagePostById(
+  postId: string,
+  pageId: string,
+  token: string,
+): Promise<{ post?: GraphPagePost; error?: string }> {
+  const url = new URL(`https://graph.facebook.com/${graphVersion()}/${postId}`);
+  url.searchParams.set("fields", "id,permalink_url,from{id}");
+  const result = await graphJson(url, token);
+  if (!result.ok) {
+    return { error: `facebook_post_lookup_${result.status}:${result.data?.error?.message || "failed"}` };
+  }
+  const post = validatedGraphPagePost(result.data, pageId);
+  return post ? { post } : { error: "facebook_post_page_mismatch" };
+}
+
+async function findPagePostByUrl(
+  submittedUrls: string[],
+  pageId: string,
+  token: string,
+): Promise<{ post?: GraphPagePost; error?: string }> {
+  const params = new URLSearchParams({
+    fields: "id,permalink_url,from{id},created_time",
+    limit: "50",
+  });
+  let next: URL | null = new URL(
+    `https://graph.facebook.com/${graphVersion()}/${pageId}/feed?${params}`,
+  );
+  for (let page = 0; next && page < 3; page += 1) {
+    if (next.protocol !== "https:" || !graphHost(next.hostname)) {
+      return { error: "facebook_feed_lookup_unsafe_paging_url" };
+    }
+    const result = await graphJson(next, token);
+    if (!result.ok) {
+      return { error: `facebook_feed_lookup_${result.status}:${result.data?.error?.message || "failed"}` };
+    }
+    for (const item of Array.isArray(result.data?.data) ? result.data.data : []) {
+      const post = validatedGraphPagePost(item, pageId);
+      if (!post) continue;
+      const graphStoryId = post.id.split("_")[1];
+      if (sameFacebookPost(submittedUrls, post.permalinkUrl, graphStoryId)) return { post };
+    }
+    const pagingUrl = typeof result.data?.paging?.next === "string" ? result.data.paging.next : "";
+    if (!pagingUrl) break;
+    try {
+      next = new URL(pagingUrl);
+    } catch {
+      return { error: "facebook_feed_lookup_unsafe_paging_url" };
+    }
+  }
+  return {};
+}
+
 /**
- * Verify the owner-supplied post instead of creating one.
- * The Graph object must belong to the configured Page. A direct URL carrying
- * a story id must agree with the id. Opaque share URLs are rejected because
- * they do not prove which post the owner intended the Bot to use.
+ * Verify the owner's already-created post instead of creating one. Post ID is
+ * optional: when omitted, resolve it from the copied URL using the configured
+ * Page feed. Every accepted Graph object must belong to that Page.
  */
-export async function verifyPagePost(postId: string, submittedUrl: string): Promise<FbPagePostResult> {
+export async function verifyPagePost(
+  postId: string | null | undefined,
+  submittedUrl: string,
+): Promise<FbPagePostResult> {
   if (!facebookReady()) return { ok: false, error: "facebook_not_configured" };
   if (!isFacebookUrl(submittedUrl)) return { ok: false, error: "invalid_facebook_url" };
 
   const pageId = process.env.FACEBOOK_PAGE_ID!;
-  const normalizedPostId = normalizePagePostId(postId, pageId);
-  if (!normalizedPostId) return { ok: false, error: "post_id_not_on_configured_page" };
-
   const token = process.env.FACEBOOK_PAGE_ACCESS_TOKEN!;
-  const fields = "id,permalink_url,from{id}";
   try {
-    const params = new URLSearchParams({ fields, access_token: token });
-    const res = await fetch(`https://graph.facebook.com/${graphVersion()}/${normalizedPostId}?${params}`);
-    const data: any = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return { ok: false, error: `facebook_post_lookup_${res.status}:${data?.error?.message || "failed"}` };
+    const suppliedPostId = String(postId || "").trim();
+    const resolvedUrl = facebookStoryIdFromUrl(submittedUrl)
+      ? submittedUrl
+      : await resolveFacebookWebUrl(submittedUrl);
+    const submittedUrls = Array.from(new Set([submittedUrl, resolvedUrl].filter(Boolean))) as string[];
+
+    if (suppliedPostId) {
+      const normalizedPostId = normalizePagePostId(suppliedPostId, pageId);
+      if (!normalizedPostId) return { ok: false, error: "post_id_not_on_configured_page" };
+      const lookup = await lookupPagePostById(normalizedPostId, pageId, token);
+      if (!lookup.post) return { ok: false, error: lookup.error || "facebook_post_not_verified" };
+      const graphStoryId = lookup.post.id.split("_")[1];
+      if (!sameFacebookPost(submittedUrls, lookup.post.permalinkUrl, graphStoryId)) {
+        return {
+          ok: false,
+          error: resolvedUrl ? "facebook_post_url_mismatch" : "facebook_share_url_unresolved",
+        };
+      }
+      return { ok: true, postId: lookup.post.id, permalinkUrl: lookup.post.permalinkUrl };
     }
 
-    const graphPostId = String(data?.id || "");
-    const graphPageId = String(data?.from?.id || "");
-    const permalinkUrl = String(data?.permalink_url || "");
-    if (graphPostId !== normalizedPostId || graphPageId !== pageId || !isFacebookUrl(permalinkUrl)) {
-      return { ok: false, error: "facebook_post_page_mismatch" };
+    const numericStoryId = submittedUrls
+      .map(facebookStoryIdFromUrl)
+      .find((value): value is string => !!value && /^\d+$/.test(value));
+    if (numericStoryId) {
+      const direct = await lookupPagePostById(`${pageId}_${numericStoryId}`, pageId, token);
+      if (direct.post && sameFacebookPost(submittedUrls, direct.post.permalinkUrl, numericStoryId)) {
+        return { ok: true, postId: direct.post.id, permalinkUrl: direct.post.permalinkUrl };
+      }
     }
 
-    const submittedStoryId = facebookStoryIdFromUrl(submittedUrl);
-    const canonicalStoryId = facebookStoryIdFromUrl(permalinkUrl);
-    const graphStoryId = normalizedPostId.split("_")[1];
-    if (!submittedStoryId || !canonicalStoryId) {
-      return { ok: false, error: "facebook_permalink_required" };
+    const found = await findPagePostByUrl(submittedUrls, pageId, token);
+    if (found.post) {
+      return { ok: true, postId: found.post.id, permalinkUrl: found.post.permalinkUrl };
     }
-    if (submittedStoryId !== canonicalStoryId && (
-      submittedStoryId !== graphStoryId || canonicalStoryId !== graphStoryId
-    )) {
-      return { ok: false, error: "facebook_post_url_mismatch" };
+    if (found.error) return { ok: false, error: found.error };
+    if (!resolvedUrl && !facebookStoryIdFromUrl(submittedUrl)) {
+      return { ok: false, error: "facebook_share_url_unresolved" };
     }
-
-    return { ok: true, postId: normalizedPostId, permalinkUrl };
+    return { ok: false, error: "facebook_post_not_found_from_url" };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "facebook_post_lookup_failed" };
   }

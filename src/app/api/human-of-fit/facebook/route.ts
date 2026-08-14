@@ -26,8 +26,8 @@ function clip(value: unknown, max = 500): string {
  * The Jongrak Health webhook deliberately has no Facebook token. It claims a
  * QA-passed article, then sends a short-lived, single-use ticket here. This
  * route claims that ticket through the HOF database, receives the owner-bound
- * Post ID/URL plus immutable comments from the RPC, verifies that the object
- * belongs to the configured Page, then comments REF → 3/3 → 2/3 → 1/3.
+ * URL plus immutable comments from the RPC, resolves the configured Page's
+ * canonical Post ID, then comments REF → 3/3 → 2/3 → 1/3.
  * It never creates the initial Facebook post.
  */
 export async function POST(req: NextRequest) {
