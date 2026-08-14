@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { postToPage } from "@/lib/facebook";
+import {
+  commentOnPostDetailed,
+  findExactPostComment,
+  verifyPagePost,
+} from "@/lib/facebook";
+import { deliverHofFacebookComments } from "@/lib/hof-facebook-bridge";
 
 export const dynamic = "force-dynamic";
 
@@ -16,14 +21,14 @@ function clip(value: unknown, max = 500): string {
 }
 
 /**
- * Facebook credential bridge for Human of Fit.
+ * Facebook comment bridge for Human of Fit.
  *
  * The Jongrak Health webhook deliberately has no Facebook token. It claims a
  * QA-passed article, then sends a short-lived, single-use ticket here. This
- * route claims that ticket through the HOF database, receives immutable post
- * copy from the RPC, and uses the Facebook credential already configured on
- * this Production service. No caller-supplied title, caption, image, or page
- * identifier is accepted.
+ * route claims that ticket through the HOF database, receives the owner-bound
+ * Post ID/URL plus immutable comments from the RPC, verifies that the object
+ * belongs to the configured Page, then comments REF → 3/3 → 2/3 → 1/3.
+ * It never creates the initial Facebook post.
  */
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
@@ -45,21 +50,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "ticket_rejected" }, { status: 401 });
   }
 
-  const message = [clip(claim.title, 180), clip(claim.description, 300)]
-    .filter(Boolean)
-    .join("\n\n");
-  const imageUrl = /^https:\/\//i.test(String(claim.cover_image ?? ""))
-    ? String(claim.cover_image)
-    : undefined;
-
   try {
-    const post = await postToPage(message, { imageUrl });
-    if (!post.posted || !post.postId || post.postId.startsWith("mock-")) {
-      return NextResponse.json({ ok: false, error: "facebook_not_configured" }, { status: 503 });
-    }
-    return NextResponse.json({ ok: true, post_id: post.postId });
+    const result = await deliverHofFacebookComments({
+      postId: String(claim.facebook_post_id ?? ""),
+      postUrl: String(claim.facebook_post_url ?? ""),
+      sections: Array.isArray(claim.sections) ? claim.sections : [],
+    }, { verifyPagePost, findExactPostComment, commentOnPostDetailed });
+    return NextResponse.json({
+      ok: result.ok,
+      post_id: result.postId,
+      post_url: result.postUrl,
+      comments: result.comments,
+      ...(result.error ? { error: result.error } : {}),
+    }, { status: result.ok ? 200 : 422 });
   } catch (error) {
-    console.error("[human-of-fit/facebook] publish", error);
-    return NextResponse.json({ ok: false, error: "facebook_publish_failed" }, { status: 502 });
+    console.error("[human-of-fit/facebook] comments", error);
+    return NextResponse.json({
+      ok: false,
+      error: error instanceof Error ? clip(error.message, 300) : "facebook_comments_failed",
+      comments: [],
+    }, { status: 502 });
   }
 }

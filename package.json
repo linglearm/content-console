@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:hof": "node --import ./scripts/register-ts-resolver.cjs --experimental-transform-types --test src/lib/hof-facebook.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
