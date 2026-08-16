@@ -25,12 +25,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/contact" className="hover:text-brand-600">
                 ติดต่อ
               </Link>
-              <Link
-                href="/admin"
-                className="rounded bg-brand-500 px-3 py-1.5 text-white hover:bg-brand-600"
-              >
-                หลังบ้าน
-              </Link>
             </nav>
           </div>
         </header>

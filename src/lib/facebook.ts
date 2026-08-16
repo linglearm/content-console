@@ -1,13 +1,13 @@
 /**
- * Facebook Graph API — โพสต์ลงเพจ
- * สิทธิ์ที่ต้องมี: pages_manage_posts, pages_read_engagement
+ * Facebook Graph API — อ่านโพสต์ของเพจ + ลงคอมเมนต์ใต้โพสต์
+ * สิทธิ์ที่ต้องมี: pages_read_engagement, pages_manage_engagement
+ *
+ * ❗ 2026-08-15 — ไฟล์นี้ **ไม่สร้างโพสต์เองอีกแล้ว** (`postToPage`/`fbPostUrl`/`commentOnPost`
+ *    ถูกถอดออกพร้อมสายผลิต SiamAthlete) เหลือผู้ใช้รายเดียวคือเส้น Human of Fit
+ *    ซึ่งเจ้าของเป็นคนโพสต์เองบนเพจ แล้วระบบมาลงคอมเมนต์ต่อ 4 ใบเท่านั้น
+ *    อย่าเติมฟังก์ชันสร้างโพสต์กลับเข้ามาโดยไม่ได้ตกลงกันก่อน
  */
 import { facebookReady } from "./env";
-
-export interface FbPostResult {
-  posted: boolean; // ยิงจริงไหม (false = mock)
-  postId: string | null;
-}
 
 export interface FbPagePostResult {
   ok: boolean;
@@ -374,85 +374,4 @@ export async function findExactPostComment(postId: string, message: string): Pro
   } catch {
     return null;
   }
-}
-
-/**
- * สร้างลิงก์ไปยังโพสต์จริงบนเพจ จาก postId ที่ Graph API คืนมา
- * รูปแบบปกติคือ "{pageId}_{storyId}" → https://www.facebook.com/{pageId}/posts/{storyId}
- * mock หรือไม่มี id → คืน null (ไม่มีลิงก์ให้กด)
- */
-export function fbPostUrl(postId: string | null): string | null {
-  if (!postId || postId.startsWith("mock-")) return null;
-  const parts = postId.split("_");
-  if (parts.length === 2 && parts[0] && parts[1]) {
-    return `https://www.facebook.com/${parts[0]}/posts/${parts[1]}`;
-  }
-  return `https://www.facebook.com/${postId}`;
-}
-
-/**
- * โพสต์ลงเพจ — message = เนื้อหาโพสต์เต็ม
- * ถ้ามี imageUrl → โพสต์เป็นรูป + แคปชั่นเต็ม (photo post), ล้มเหลวก็ตกไปโพสต์ข้อความแทน
- * mock mode: คืน postId ปลอมเพื่อให้ฟลว์เดินต่อได้
- */
-export async function postToPage(
-  message: string,
-  opts?: { imageUrl?: string; link?: string }
-): Promise<FbPostResult> {
-  if (!facebookReady()) {
-    return { posted: false, postId: `mock-fb-${Date.now()}` };
-  }
-  const pageId = process.env.FACEBOOK_PAGE_ID!;
-  const token = process.env.FACEBOOK_PAGE_ACCESS_TOKEN!;
-  const version = process.env.FACEBOOK_GRAPH_VERSION || "v21.0";
-  const headers = { "content-type": "application/x-www-form-urlencoded" };
-
-  // 1) มีรูป → โพสต์รูป + แคปชั่นเต็ม
-  if (opts?.imageUrl) {
-    try {
-      const photoParams = new URLSearchParams({
-        url: opts.imageUrl,
-        message,
-        access_token: token,
-      });
-      const res = await fetch(`https://graph.facebook.com/${version}/${pageId}/photos`, {
-        method: "POST",
-        headers,
-        body: photoParams.toString(),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return { posted: true, postId: data.post_id || data.id || null };
-      }
-      // ไม่ผ่าน (เช่นรูปโหลดไม่ทัน) → ตกไปโพสต์ข้อความด้านล่าง
-    } catch {
-      // ตกไปโพสต์ข้อความด้านล่าง
-    }
-  }
-
-  // 2) โพสต์ข้อความล้วน (+ link ถ้ามี)
-  const feedParams = new URLSearchParams({ message, access_token: token });
-  if (opts?.link) feedParams.set("link", opts.link);
-  const res = await fetch(`https://graph.facebook.com/${version}/${pageId}/feed`, {
-    method: "POST",
-    headers,
-    body: feedParams.toString(),
-  });
-  if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`Facebook post error ${res.status}: ${detail}`);
-  }
-  const data = await res.json();
-  return { posted: true, postId: data.id || null };
-}
-
-/**
- * คอมเมนต์ใต้โพสต์ของเพจ — ใช้ลงแหล่งอ้างอิง (references) แยกจากตัวโพสต์
- * postId = "{pageId}_{storyId}" ที่ได้จาก postToPage
- * คืน true ถ้าคอมเมนต์สำเร็จ, false ถ้า mock/ข้อความว่าง/ยิงไม่ผ่าน (ไม่ throw — คอมเมนต์พลาดไม่ควรทำให้ publish ล้ม)
- */
-export async function commentOnPost(postId: string | null, message: string): Promise<boolean> {
-  const text = (message || "").trim();
-  if (!facebookReady() || !postId || postId.startsWith("mock-") || !text) return false;
-  return (await commentOnPostDetailed(postId, text)).ok;
 }
